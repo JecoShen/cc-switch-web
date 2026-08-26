@@ -47,14 +47,14 @@
 
 ### 2.1 当前生效的账号/密码
 
-> ⚠️ **生产环境强凭证** — 本节只记录**用户名**（非敏感，便于团队识别）。
-> **密码明文不写进仓库**（防止即使 Private repo 也泄露），仅存于：
+> ⚠️ **生产环境强凭证** — 本节**不再记录任何具体账号/密码**（即使 Private repo 也建议这么做，
+> GitHub 备份/镜像都不可控）。具体值仅存于：
 > 1. 部署主机的 `/root/.cc-switch/web-auth.json`（chmod 600，bcrypt cost 12 哈希）
 > 2. 你的密码管理器（1Password / Bitwarden 等）
 >
 > 修改密码请参见 §4.3 / §4.4。
 
-- **用户名**: `qu9z298xjt4y`（12 位小写字母 + 数字，仅用于登录识别）
+- **用户名**: `[见部署主机 /root/.cc-switch/web-auth.json]`（12 位小写字母 + 数字，仅用于登录识别；**仓库不存具体值**）
 - **密码**: `[见部署主机 /root/.cc-switch/web-auth.json]`（20 位强密码，bcrypt 哈希，**仓库不存明文**）
 - **配置文件**: `/root/.cc-switch/web-auth.json`（`chmod 600`）
 - **会话有效期**: 7 天（cookie `cc-switch-session`，`HttpOnly; SameSite=Strict; Max-Age=604800; Path=/`）
