@@ -47,15 +47,18 @@
 
 ### 2.1 当前生效的账号/密码
 
-> ⚠️ **生产环境强凭证**（每次部署/迁移时务必同步更新本节）
+> ⚠️ **生产环境强凭证** — 本节只记录**用户名**（非敏感，便于团队识别）。
+> **密码明文不写进仓库**（防止即使 Private repo 也泄露），仅存于：
+> 1. 部署主机的 `/root/.cc-switch/web-auth.json`（chmod 600，bcrypt cost 12 哈希）
+> 2. 你的密码管理器（1Password / Bitwarden 等）
+>
+> 修改密码请参见 §4.3 / §4.4。
 
-- **用户名**: `qu9z298xjt4y`（12 位小写字母 + 数字，bcrypt 哈希存储）
-- **密码**: `.+%=B(pmP[d]#f2)=<$d`（20 位，9 类特殊符号 + 大小写 + 数字）
+- **用户名**: `qu9z298xjt4y`（12 位小写字母 + 数字，仅用于登录识别）
+- **密码**: `[见部署主机 /root/.cc-switch/web-auth.json]`（20 位强密码，bcrypt 哈希，**仓库不存明文**）
 - **配置文件**: `/root/.cc-switch/web-auth.json`（`chmod 600`）
 - **会话有效期**: 7 天（cookie `cc-switch-session`，`HttpOnly; SameSite=Strict; Max-Age=604800; Path=/`）
 - **失败响应**: `{"error":"Unauthorized"}`（401）/ `{"success":false,"error":"Invalid username or password"}`
-
-> 密码原始值**只存于本节**作为部署留底；hash 之外的明文无第二份。如需修改，参见 §4.3。
 
 ### 2.2 进程管理（systemd）
 
