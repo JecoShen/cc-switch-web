@@ -337,3 +337,68 @@ systemctl restart cc-switch-web.service
 - **v3.21.0**（下一个官方 release）: 重复第 3 节的标准流程
 - 优先合并 v3.20.0 缺失特性：pi、Grok Build、XAI OAuth、Model pricing
 - 改进 `start-web.sh` 让它能检测 v3.20.0 后续发布并自动适配
+
+---
+
+## 9. 工具升级误报失败（已知 bug 修复记录）
+
+### 9.1 症状
+
+Web UI 点"升级本地环境"后端**实际全部升级成功**（手动验证：claude 2.1.239→2.1.246、codex 0.149.0→16s 改 2 packages、opencode 1.18.21→1.18.23、gemini 0.56.0→0.57.0），但前端 toast 报失败:
+
+- Claude Code: `Try running "claude doctor" for diagnostics`
+- Codex / Gemini CLI: `npm error You can rerun the command with --loglevel=verbose`
+- OpenCode: `Unknown: FileSystem.open (/root/.local/share/opencode/log/opencode.log)`
+
+### 9.2 真因：多安装冲突
+
+用户机器上每种工具有**两份**:
+
+| 路径 | 来源 | 通常 |
+|---|---|---|
+| `/root/.local/bin/<tool>` | native installer (Anthropic / SST) | 较新（正确升级） |
+| `/www/server/nodejs/v24.15.0/bin/<tool>` | `npm i -g` 残留 | 较旧（PATH 第一个命中） |
+
+`probeToolInstallations` 正确识别 native 安装为 `is_path_default=true`，锚定升级到它，所以**升级真的成功**。但 `try_get_version`（`src-tauri/src/commands/misc.rs:1002`）用 `$SHELL -lic`（登录+交互式 shell）读 `~/.zshrc`/`~/.bashrc`，命中 PATH 第一个 → npm 旧版 → 升级后"版本没变"是假象。
+
+OpenCode 例外：`opencode upgrade` 自身因 log 目录不可写返回非 0，stderr 被透传。
+
+### 9.3 怎么确认
+
+```bash
+which -a claude codex gemini opencode
+for p in $(which -a claude); do echo "$p:"; "$p" --version; done
+realpath -m $(which claude)
+ls -la /root/.local/share/claude/versions/ 2>/dev/null
+```
+
+通常会看到 native 那份 2.1.246、npm 那份更旧。
+
+### 9.4 临时手动清理（修复前）
+
+```bash
+# Claude Code
+/root/.local/bin/claude update || /root/.local/bin/npm i -g @anthropic-ai/claude-code@latest
+
+# Codex / Gemini (npm-anchored)
+/www/server/nodejs/v24.15.0/bin/npm i -g @openai/codex@latest
+/www/server/nodejs/v24.15.0/bin/npm i -g @google/gemini-cli@latest
+
+# OpenCode
+/root/.local/bin/opencode upgrade
+
+# 确认 native 工作后,清理 npm 残留(可选)
+rm -f /www/server/nodejs/v24.15.0/bin/{claude,codex,gemini,opencode}
+hash -r
+```
+
+### 9.5 修复后的行为
+
+代码修复后,升级流程:
+
+1. 后端把升级锚定到 `is_path_default` 那处（已是）
+2. 前端 `executeRun` 在 `refreshToolVersions` 之后并行调 `probeToolInstallations`，拿到完整 install 列表
+3. "版本没变"判定（`isVersionStillUnchanged`）看完整 install 列表，任一 runnable.version > previousVersion 即视为升级成功
+4. 软失败 toast 仍出现时（极少见），点 toast 上的"重试升级"按钮可重跑升级并刷新 install 列表
+5. `finish_lifecycle_output` 识别三种良性 stderr：Claude doctor 建议、npm `--loglevel=verbose` 警告、OpenCode log 目录不可写
+

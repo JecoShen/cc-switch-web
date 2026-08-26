@@ -250,23 +250,65 @@ fn run_tool_lifecycle_silently(command_line: &str, label: &str) -> Result<(), St
 
 /// 把子进程退出结果转成 `Result`：成功返回 `Ok`；失败提取 stderr（空则回退 stdout）
 /// 的末尾若干行作为错误详情，避免把整段安装日志塞进 toast。
+///
+/// 已知"良性"非零退出白名单：tool 自身确实成功升级（log 文件可写性 / 退出码噪声
+/// 等外围条件导致非零），避免误导用户。命中即返回 Ok，但把 stderr 写入服务器日志
+/// 供后续诊断可见。白名单由 `is_benign_lifecycle_stderr` 维护。
 fn finish_lifecycle_output(output: &std::process::Output) -> Result<(), String> {
     if output.status.success() {
         return Ok(());
     }
+
     let stderr = decode_command_output(&output.stderr);
     let stdout = decode_command_output(&output.stdout);
-    let raw = if stderr.trim().is_empty() {
-        stdout.trim()
-    } else {
-        stderr.trim()
-    };
+    let stderr_trim = stderr.trim();
+    let stdout_trim = stdout.trim();
+
+    // 已知良性退出：tool 升级成功但外围条件导致非零退出。命中即返回 Ok + log 警告,
+    // 避免前端 toast 误报"升级失败"。
+    if is_benign_lifecycle_stderr(stderr_trim, stdout_trim) {
+        log::warn!(
+            "[lifecycle] exit={:?} but treating as success; stderr={}",
+            output.status.code(),
+            last_lines(stderr_trim, 4)
+        );
+        return Ok(());
+    }
+
+    let raw = if stderr_trim.is_empty() { stdout_trim } else { stderr_trim };
     let detail = last_lines(raw, 8);
     Err(if detail.is_empty() {
         format!("命令执行失败 (exit code: {:?})", output.status.code())
     } else {
         detail
     })
+}
+
+/// 判定 stderr 是否是"已知良性"的非致命信号。仅在 `finish_lifecycle_output` 的
+/// exit != 0 路径上调用。必须保守：宁可漏报（用户重新看一次 toast）也不可误判
+/// （吞掉真实失败）。白名单 = tool 升级后外围条件噪声的固定模式。
+fn is_benign_lifecycle_stderr(stderr: &str, stdout: &str) -> bool {
+    if stderr.is_empty() {
+        return false;
+    }
+    // Claude Code: 升级成功后建议运行 `claude doctor` —— 升级本身已成功。
+    if stderr.contains("Try running") && stderr.contains("claude doctor") {
+        return true;
+    }
+    // npm 升级成功 + 顺手警告 rerun --loglevel=verbose（Codex/Gemini self-update 常见）。
+    // 必须有 stdout 表明升级确实落地了（added/changed/updated/...）才认。
+    if stderr.contains("npm error") && stderr.contains("--loglevel=verbose") {
+        return stdout.contains("added")
+            || stdout.contains("changed")
+            || stdout.contains("up to date")
+            || stdout.contains("updated")
+            || stdout.contains("+ ");
+    }
+    // OpenCode: log 目录不可写不阻塞升级（自升级文件已写入，只是收尾报错）。
+    if stderr.contains("FileSystem.open") && stderr.contains("opencode.log") {
+        return true;
+    }
+    false
 }
 
 /// 取文本末尾最多 `n` 行（npm / pip 的关键错误通常出现在输出尾部）。
@@ -745,10 +787,26 @@ async fn get_single_tool_version_impl(
 
         #[cfg(not(target_os = "windows"))]
         {
-            // PATH 第一个命令优先；只有它确实没装(NotFound)才去常见目录兜底扫描。
-            match try_get_version(tool) {
-                ShellProbe::NotFound(_) => scan_cli_version(tool),
-                found => found,
+            // 多安装场景：先枚举全部安装，优先取 `is_path_default`（= 升级作用目标）
+            // 的版本作为本地版本；只有当 path_default 探不到 / 跑不起来时,才退回
+            // `try_get_version` 走用户 shell PATH 探测。多安装冲突(用户同时存在
+            // native + npm 残留)时,这一步避免了"升级后版本没变"的假阴性:
+            // 升级真的写到了 path_default 那处,只是 PATH 第一个 npm 残留旧版遮蔽了。
+            let tool_owned = tool.to_string();
+            let enumerate_result = tokio::task::spawn_blocking(move || {
+                let installs = enumerate_tool_installations(&tool_owned);
+                (path_default_version(&installs), installs)
+            })
+            .await
+            .ok();
+            if let Some((Some(version), _)) = enumerate_result {
+                ShellProbe::Found(version)
+            } else {
+                // 兜底:PATH 第一个命令优先；只有它确实没装(NotFound)才去常见目录扫描。
+                match try_get_version(tool) {
+                    ShellProbe::NotFound(_) => scan_cli_version(tool),
+                    found => found,
+                }
             }
         }
     };
@@ -1932,6 +1990,26 @@ fn enumerate_tool_installations(tool: &str) -> Vec<ToolInstallation> {
     // PATH 默认那处排最前，UI 一眼看到"命令行默认用的是哪处"。
     installs.sort_by_key(|i| std::cmp::Reverse(i.is_path_default));
     installs
+}
+
+/// 从已枚举的安装列表中取"PATH 默认那处"的版本。
+/// 供 `get_tool_versions` 在多安装场景下用 `is_path_default` 那一处的版本作为
+/// "工具当前版本",避免 `try_get_version` 走用户 PATH 第一个(常常是 npm 残留旧版)
+/// 与"升级实际作用的目标"对不上,造成"升级后版本号没变"的假阴性。
+///
+/// 找不到 path_default 且 runnable 时,兜底取首个 runnable 有版本号的安装(只有
+/// 一处安装、或枚举器无法判定 path_default 的边缘情况)。无任何可用版本时返回 None。
+pub fn path_default_version(installs: &[ToolInstallation]) -> Option<String> {
+    installs
+        .iter()
+        .find(|i| i.is_path_default && i.runnable)
+        .and_then(|i| i.version.clone())
+        .or_else(|| {
+            installs
+                .iter()
+                .find(|i| i.runnable)
+                .and_then(|i| i.version.clone())
+        })
 }
 
 /// 工具对应的 npm 包名（hermes 走自己的 CLI/installer，不在此表）。锚定升级据此拼 `npm i -g`。

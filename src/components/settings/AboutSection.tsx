@@ -38,6 +38,11 @@ import type { AppId } from "@/lib/api/types";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import { isWindows } from "@/lib/platform";
 import { isUpdateAvailable } from "@/lib/version";
+import {
+  isVersionStillUnchanged,
+  pickedUpgradedVersion,
+  pickReport,
+} from "@/lib/api/toolVersionUnchanged";
 import { ToolUpgradeConfirmDialog } from "./ToolUpgradeConfirmDialog";
 import { ToolInstallRow } from "./ToolInstallRow";
 
@@ -571,6 +576,7 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
         detail: string;
         soft: boolean;
         kind?: "notRunnable" | "versionUnchanged";
+        installs?: ToolInstallation[];
       }[] = [];
       let succeeded = 0;
 
@@ -586,37 +592,59 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
             action,
             wslShellByTool,
           );
-          // 静默执行真正结束后刷新该工具版本，卡片立即反映结果。
-          const refreshed = await refreshToolVersions(
-            [toolName],
-            wslShellByTool,
-          );
+          // 静默执行真正结束后刷新该工具版本,卡片立即反映结果。
+          // 并行再拉一次 install 列表:版本对比必须看完整安装(`try_get_version`
+          // 走用户 shell PATH,会被 npm 残留旧版遮蔽;只有 enumerate 全集才能
+          // 判定"升级是否真的没生效"以及"作用到了哪处")。
+          const [refreshed, installReports] = await Promise.all([
+            refreshToolVersions([toolName], wslShellByTool),
+            settingsApi
+              .probeToolInstallations([toolName])
+              .catch((err) => {
+                // probe 失败不应阻塞升级成功路径 —— 退化为空 install 列表,
+                // 走原有的 single-version 判定(行为不变)。
+                console.error(
+                  `[AboutSection] probeToolInstallations failed for ${toolName}`,
+                  err,
+                );
+                return [] as ToolInstallationReport[];
+              }),
+          ]);
           const tool = refreshed.find((t) => t.name === toolName);
+          const report = pickReport(installReports, toolName);
+          const installs = report?.installs ?? [];
           if (tool?.version) {
             const latestVersion = tool.latest_version ?? previousLatestVersion;
+            // 优先用完整 install 列表判定版本是否真没变;`tool.version` 仍作为
+            // `isUpdateAvailable` 的输入与"是否还有新版"配合。
             const versionUnchangedAfterUpdate =
               action === "update" &&
               Boolean(previousVersion) &&
-              tool.version === previousVersion &&
+              isVersionStillUnchanged(previousVersion, installs) &&
               isUpdateAvailable(tool.version, latestVersion);
 
             if (versionUnchangedAfterUpdate) {
-              // 有些上游 updater 会在未实际改动版本时仍返回 0。这里用刷新后的
-              // 当前版本 + latest_version 再确认一次，避免给用户误报升级成功。
+              // 有些上游 updater 会在未实际改动版本时仍返回 0。这里用 install 列表
+              // + latest_version 再确认一次,避免给用户误报升级成功。多安装冲突时
+              // 提示是哪一处没动。
               failures.push({
                 toolName,
                 detail: t("settings.toolActionVersionUnchanged", {
-                  version: tool.version,
+                  version: pickedUpgradedVersion(installs) ?? tool.version,
                   latest: latestVersion ?? t("common.unknown"),
+                  conflict: installs.length > 1
+                    ? t("settings.toolActionVersionUnchangedConflict")
+                    : "",
                 }),
                 soft: true,
                 kind: "versionUnchanged",
+                installs,
               });
               void diagnoseToolSilently(toolName);
             } else {
               succeeded += 1;
-              // 升级成功后无条件补诊：版本没变多半被另一处遮蔽，版本变了另一处也可能仍在，
-              // 两种都要刷新冲突展示（diagnoseToolSilently 无冲突时会自动清旧）。
+              // 升级成功后无条件补诊:版本没变多半被另一处遮蔽,版本变了另一处也可能仍在,
+              // 两种都要刷新冲突展示(diagnoseToolSilently 无冲突时会自动清旧)。
               if (action === "update") {
                 void diagnoseToolSilently(toolName);
               }
@@ -692,6 +720,12 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
       if (succeeded === 0 && hardFailures.length === 0) {
         // 命令均成功执行、但结果需要用户介入（版本没变 / 装上却跑不起来）
         // → 降级为 warning 并解释原因。
+        // 「版本没变」分支额外给一个 Retry 按钮:再跑一次 lifecycle action 并
+        // 刷新 install 列表,常见的多安装冲突场景下能让用户在不离开页面的情况下
+        // 触发再一轮诊断与升级(虽然锚定到同一文件,但能带动 install 列表与 toast 刷新)。
+        const versionUnchangedFailures = allSoftVersionUnchanged
+          ? failures.filter((f) => f.kind === "versionUnchanged")
+          : [];
         toast.warning(
           allSoftVersionUnchanged
             ? t("settings.toolActionVersionUnchangedTitle")
@@ -699,6 +733,19 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
           {
             description: failureDescription || undefined,
             closeButton: true,
+            duration: 15000,
+            action: versionUnchangedFailures.length > 0
+              ? {
+                  label: t("settings.toolActionRetry"),
+                  onClick: () =>
+                    void handleRetryUpgrade(
+                      versionUnchangedFailures.map((f) => ({
+                        toolName: f.toolName,
+                        installs: f.installs ?? [],
+                      })),
+                    ),
+                }
+              : undefined,
           },
         );
       } else if (succeeded === 0) {
@@ -725,6 +772,41 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
       refreshToolVersions,
       diagnoseToolSilently,
     ],
+  );
+
+  // 软失败 toast 上的"重试升级"按钮:对所有失败工具再跑一次 lifecycle action,
+  // 然后用完整 install 列表重新判定。后端 `installs_anchored_command` 本身已锚定
+  // 到 `is_path_default` 那处,重试不会写到旧版 npm 残留;但能给用户一个"再试一次"
+  // 的入口,并带动 install 列表刷新(`diagnoseToolSilently` + 重新 fetch versions),
+  // 让 toast 立即反映新状态。
+  const handleRetryUpgrade = useCallback(
+    async (
+      items: { toolName: ToolName; installs: ToolInstallation[] }[],
+    ) => {
+      for (const { toolName } of items) {
+        try {
+          await settingsApi.runToolLifecycleAction(
+            [toolName],
+            "update",
+            wslShellByTool,
+          );
+          await refreshToolVersions([toolName], wslShellByTool);
+          void diagnoseToolSilently(toolName);
+        } catch (error) {
+          console.error(
+            `[AboutSection] Retry upgrade failed for ${toolName}`,
+            error,
+          );
+        }
+      }
+      // 全量重拉一次,让 UI 顶部卡片的版本号反映最新状态。
+      try {
+        await loadAllToolVersions({ force: true });
+      } catch (error) {
+        console.error("[AboutSection] loadAllToolVersions after retry failed", error);
+      }
+    },
+    [wslShellByTool, refreshToolVersions, diagnoseToolSilently, loadAllToolVersions],
   );
 
   // 升级/安装的统一入口锁。所有动作在入口处先登记 preflight、出口处解锁;
