@@ -23,7 +23,7 @@ import {
   parseFiniteNumber,
 } from "./format";
 import {
-  getCacheWriteAvailability,
+  CACHE_INCLUSIVE_APP_TYPES,
   type AppType,
   type UsageRangeSelection,
   type UsageSummary,
@@ -61,17 +61,9 @@ const TITLE_THEMES: Record<AppType | "all", TitleTheme> = {
     accent: "text-sky-600 dark:text-sky-400",
     iconBg: "bg-sky-500/10",
   },
-  grokbuild: {
-    accent: "text-rose-600 dark:text-rose-400",
-    iconBg: "bg-rose-500/10",
-  },
   opencode: {
     accent: "text-purple-600 dark:text-purple-400",
     iconBg: "bg-purple-500/10",
-  },
-  pi: {
-    accent: "text-fuchsia-600 dark:text-fuchsia-400",
-    iconBg: "bg-fuchsia-500/10",
   },
 };
 
@@ -124,7 +116,25 @@ function pickSummary(
   if (appType) {
     return apps.find((a) => a.appType === appType)?.summary;
   }
-  return aggregateSummaries(apps.map((a) => a.summary));
+  return aggregateSummaries(apps.map((item) => item.summary));
+}
+
+type CacheWriteState = "ok" | "partial" | "na";
+
+/**
+ * Anthropic-style protocols report cache creation; OpenAI-style protocols
+ * (Codex/Gemini) do not — so a mix shows the number with a caveat, all-OpenAI
+ * shows N/A. `appTypes` is the set actually contributing to the displayed
+ * summary (a single app, or every app that participated in "all").
+ */
+function deriveCacheWriteState(appTypes: string[]): CacheWriteState {
+  if (appTypes.length === 0) return "ok";
+  const inclusive = appTypes.filter((t) =>
+    CACHE_INCLUSIVE_APP_TYPES.has(t),
+  ).length;
+  if (inclusive === appTypes.length) return "na";
+  if (inclusive === 0) return "ok";
+  return "partial";
 }
 
 /**
@@ -179,8 +189,8 @@ export function UsageHero({
   const appLabel =
     appType && appType in TITLE_THEMES ? t(`usage.appFilter.${appType}`) : null;
 
-  const cacheWriteState = getCacheWriteAvailability(
-    appType ? [appType] : allApps.map((a) => a.appType),
+  const cacheWriteState = deriveCacheWriteState(
+    appType ? [appType] : allApps.map((item) => item.appType),
   );
 
   const input = summary?.totalInputTokens ?? 0;

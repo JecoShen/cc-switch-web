@@ -1,5 +1,6 @@
 use crate::services::subscription::SubscriptionQuota;
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn get_coding_plan_quota(
     base_url: String,

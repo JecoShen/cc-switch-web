@@ -19,81 +19,6 @@ fn settings_path(home: &Path) -> PathBuf {
     home.join(".cc-switch").join("settings.json")
 }
 
-fn grokbuild_config(name: &str, endpoint: &str, api_key: &str) -> String {
-    format!(
-        r#"[models]
-default = "grok-4.5"
-
-[model."grok-4.5"]
-model = "grok-4.5"
-base_url = "{endpoint}"
-name = "{name}"
-api_key = "{api_key}"
-api_backend = "responses"
-context_window = 500000
-"#
-    )
-}
-
-#[test]
-fn grokbuild_import_and_switch_write_live_config() {
-    let _guard = test_mutex().lock().expect("acquire test mutex");
-    reset_test_fs();
-    let home = ensure_test_home();
-    let live_path = home.join(".grok").join("config.toml");
-    std::fs::create_dir_all(live_path.parent().expect("grok config dir"))
-        .expect("create grok config dir");
-    let imported_config = grokbuild_config("Imported", "https://old.example/v1", "old-key");
-    std::fs::write(&live_path, &imported_config).expect("seed Grok Build config");
-
-    let state = create_test_state().expect("create test state");
-    import_default_config_test_hook(&state, AppType::GrokBuild)
-        .expect("import Grok Build default provider");
-
-    let imported = state
-        .db
-        .get_provider_by_id("default", AppType::GrokBuild.as_str())
-        .expect("query imported provider")
-        .expect("imported provider exists");
-    assert_eq!(
-        imported
-            .settings_config
-            .get("config")
-            .and_then(|value| value.as_str()),
-        Some(imported_config.as_str())
-    );
-
-    let next_config = grokbuild_config("Relay", "https://new.example/v1", "new-key");
-    state
-        .db
-        .save_provider(
-            AppType::GrokBuild.as_str(),
-            &Provider::with_id(
-                "relay".to_string(),
-                "Relay".to_string(),
-                json!({ "config": next_config }),
-                None,
-            ),
-        )
-        .expect("save second Grok Build provider");
-
-    switch_provider_test_hook(&state, AppType::GrokBuild, "relay")
-        .expect("switch Grok Build provider");
-
-    assert_eq!(
-        std::fs::read_to_string(&live_path).expect("read switched Grok Build config"),
-        next_config
-    );
-    assert_eq!(
-        state
-            .db
-            .get_current_provider(AppType::GrokBuild.as_str())
-            .expect("read Grok Build current provider")
-            .as_deref(),
-        Some("relay")
-    );
-}
-
 #[test]
 fn codex_startup_import_fresh_install_imports_once_and_syncs_current_setting() {
     let _guard = test_mutex().lock().expect("acquire test mutex");
@@ -166,98 +91,6 @@ fn codex_startup_import_fresh_install_imports_once_and_syncs_current_setting() {
         !ProviderService::should_import_default_config_on_startup(&state, &AppType::Codex)
             .expect("re-check startup import eligibility"),
         "subsequent startup should skip once Codex already has providers"
-    );
-}
-
-#[test]
-fn codex_startup_import_accepts_config_without_auth_file() {
-    let _guard = test_mutex().lock().expect("acquire test mutex");
-    reset_test_fs();
-    let _home = ensure_test_home();
-
-    let config_path = get_codex_config_path();
-    if let Some(parent) = config_path.parent() {
-        std::fs::create_dir_all(parent).expect("create codex config dir");
-    }
-    std::fs::write(
-        &config_path,
-        r#"model_provider = "aihubmix"
-
-[model_providers.aihubmix]
-name = "AiHubMix"
-base_url = "https://aihubmix.example/v1"
-wire_api = "responses"
-requires_openai_auth = true
-experimental_bearer_token = "live-key"
-"#,
-    )
-    .expect("seed config.toml without auth.json");
-    assert!(
-        !get_codex_auth_path().exists(),
-        "test should not seed auth.json"
-    );
-
-    let state = create_test_state().expect("create test state");
-    import_default_config_test_hook(&state, AppType::Codex)
-        .expect("import codex config-only default");
-
-    let providers = state
-        .db
-        .get_all_providers(AppType::Codex.as_str())
-        .expect("get codex providers after import");
-    let provider = providers.get("default").expect("default provider exists");
-    assert_eq!(
-        provider.settings_config.pointer("/auth"),
-        Some(&json!({})),
-        "missing auth.json should import as an empty auth object"
-    );
-    assert!(
-        provider
-            .settings_config
-            .get("config")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default()
-            .contains("experimental_bearer_token"),
-        "config.toml content should still be imported"
-    );
-}
-
-#[test]
-fn codex_startup_import_marks_oauth_only_default_official() {
-    let _guard = test_mutex().lock().expect("acquire test mutex");
-    reset_test_fs();
-    let _home = ensure_test_home();
-
-    let auth = json!({
-        "auth_mode": "chatgpt",
-        "tokens": {
-            "id_token": "oauth-id",
-            "access_token": "oauth-access"
-        }
-    });
-    let config = r#"[mcp_servers.echo]
-command = "echo"
-"#;
-    write_codex_live_atomic(&auth, Some(config)).expect("seed oauth-only codex live config");
-
-    let state = create_test_state().expect("create test state");
-    import_default_config_test_hook(&state, AppType::Codex).expect("import codex default");
-
-    let providers = state
-        .db
-        .get_all_providers(AppType::Codex.as_str())
-        .expect("get codex providers after import");
-    let provider = providers.get("default").expect("default provider exists");
-
-    assert_eq!(
-        provider.category.as_deref(),
-        Some("official"),
-        "OAuth-only live Codex installs should keep official behavior"
-    );
-    assert_eq!(
-        provider.settings_config.pointer("/auth/tokens/id_token"),
-        Some(&json!("oauth-id")),
-        "import should preserve OAuth login material"
     );
 }
 
@@ -375,7 +208,6 @@ command = "say"
                 claude: false,
                 codex: true, // 启用 Codex
                 gemini: false,
-                grokbuild: false,
                 opencode: false,
                 hermes: false,
             },
@@ -398,18 +230,14 @@ command = "say"
             .get("OPENAI_API_KEY")
             .and_then(|v| v.as_str())
             .unwrap_or(""),
-        "legacy-key",
-        "Codex provider switching should preserve the existing live auth.json"
+        "fresh-key",
+        "live auth.json should reflect new provider"
     );
 
     let config_text = std::fs::read_to_string(get_codex_config_path()).expect("read config.toml");
     assert!(
         config_text.contains("mcp_servers.echo-server"),
         "config.toml should contain synced MCP servers"
-    );
-    assert!(
-        config_text.contains("experimental_bearer_token"),
-        "config.toml should carry the selected provider API key as bearer token"
     );
 
     let current_id = app_state

@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/transport";
 import type { SubscriptionQuota } from "@/types/subscription";
 
 export const subscriptionApi = {
@@ -6,8 +6,6 @@ export const subscriptionApi = {
     invoke("get_subscription_quota", { tool }),
   getCodexOauthQuota: (accountId: string | null): Promise<SubscriptionQuota> =>
     invoke("get_codex_oauth_quota", { accountId }),
-  getXaiOauthQuota: (accountId: string | null): Promise<SubscriptionQuota> =>
-    invoke("get_xai_oauth_quota", { accountId }),
   getCodingPlanQuota: (
     baseUrl: string,
     apiKey: string,

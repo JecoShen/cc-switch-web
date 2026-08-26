@@ -22,10 +22,7 @@ use serde_json::{json, Value};
 const ANTHROPIC_THINKING_PLACEHOLDER: &str = "tool call";
 const ANTHROPIC_REDACTED_THINKING_PLACEHOLDER: &str = "[redacted thinking]";
 // Keep hints lowercase; matching lowercases only the input value.
-// Moonshot/Kimi exited on vendor request (2026-08): their endpoints no longer
-// require thinking replay on tool-call turns, and injected placeholders
-// disrupt the model's chain of thought. Do not re-add without re-confirming.
-const REASONING_VENDOR_HINTS: &[&str] = &["deepseek", "mimo", "xiaomimimo"];
+const REASONING_VENDOR_HINTS: &[&str] = &["moonshot", "kimi", "deepseek", "mimo", "xiaomimimo"];
 
 // ChatGPT Codex 后端按 originator+version 组合做模型 cohort 路由：非官方身份会把
 // gpt-5.6-luna 解析到未部署的内部引擎（HTTP 404 Model not found，openai/codex#31967，
@@ -39,14 +36,9 @@ const CODEX_OAUTH_CLIENT_VERSION: &str = "0.144.1";
 /// 供 handler/forwarder 外部使用的公开函数。
 /// 优先级：meta.apiFormat > settings_config.api_format > openrouter_compat_mode > 默认 "anthropic"
 pub fn get_claude_api_format(provider: &Provider) -> &'static str {
-    // 0) Managed Responses OAuth providers force their wire protocol. This is
-    // an invariant, not a preset default: editable metadata must not be able to
-    // send an Anthropic Messages body to a Responses-only upstream.
+    // 0) Codex OAuth 强制使用 openai_responses（不可被覆盖）
     if let Some(meta) = provider.meta.as_ref() {
-        if matches!(
-            meta.provider_type.as_deref(),
-            Some("codex_oauth" | "xai_oauth")
-        ) {
+        if meta.provider_type.as_deref() == Some("codex_oauth") {
             return "openai_responses";
         }
     }
@@ -408,28 +400,12 @@ pub fn transform_claude_request_for_api_format(
             // Codex OAuth (ChatGPT Plus/Pro 反代) 需要在请求体里强制 store: false
             // + include: ["reasoning.encrypted_content"]，由 transform 层统一处理。
             let codex_fast_mode = provider.codex_fast_mode_enabled();
-            let mut result = super::transform_responses::anthropic_to_responses(
+            super::transform_responses::anthropic_to_responses(
                 body,
                 cache_key,
                 is_codex_oauth,
                 codex_fast_mode,
-            )?;
-            if provider.is_xai_oauth() {
-                const REASONING_MARKER: &str = "reasoning.encrypted_content";
-                let mut include = result
-                    .get("include")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default();
-                if !include
-                    .iter()
-                    .any(|item| item.as_str() == Some(REASONING_MARKER))
-                {
-                    include.push(json!(REASONING_MARKER));
-                }
-                result["include"] = json!(include);
-            }
-            Ok(result)
+            )
         }
         "openai_chat" => {
             let preserve_reasoning_content =
@@ -475,7 +451,6 @@ impl ClaudeAdapter {
     /// 根据 base_url 和 auth_mode 检测具体的供应商类型：
     /// - GitHubCopilot: meta.provider_type 为 github_copilot 或 base_url 包含 githubcopilot.com
     /// - CodexOAuth: meta.provider_type 为 codex_oauth
-    /// - XaiOAuth: meta.provider_type 为 xai_oauth
     /// - OpenRouter: base_url 包含 openrouter.ai
     /// - ClaudeAuth: auth_mode 为 bearer_only
     /// - Claude: 默认 Anthropic 官方
@@ -493,10 +468,6 @@ impl ClaudeAdapter {
         // 检测 Codex OAuth (ChatGPT Plus/Pro)
         if self.is_codex_oauth(provider) {
             return ProviderType::CodexOAuth;
-        }
-
-        if self.is_xai_oauth(provider) {
-            return ProviderType::XaiOAuth;
         }
 
         // 检测 GitHub Copilot
@@ -525,10 +496,6 @@ impl ClaudeAdapter {
             }
         }
         false
-    }
-
-    fn is_xai_oauth(&self, provider: &Provider) -> bool {
-        provider.is_xai_oauth()
     }
 
     /// 检测是否为 GitHub Copilot 供应商
@@ -709,12 +676,6 @@ impl ProviderAdapter for ClaudeAdapter {
             return Ok(super::CHATGPT_CODEX_BASE_URL.to_string());
         }
 
-        // xAI OAuth: ignore editable provider base URLs and always use the xAI
-        // API origin associated with the managed token.
-        if self.is_xai_oauth(provider) {
-            return Ok(super::XAI_API_BASE_URL.to_string());
-        }
-
         // 1. 从 env 中获取
         if let Some(env) = provider.settings_config.get("env") {
             if let Some(url) = env.get("ANTHROPIC_BASE_URL").and_then(|v| v.as_str()) {
@@ -774,13 +735,6 @@ impl ProviderAdapter for ClaudeAdapter {
             ));
         }
 
-        if provider_type == ProviderType::XaiOAuth {
-            return Some(AuthInfo::new(
-                "xai_oauth_placeholder".to_string(),
-                AuthStrategy::XaiOAuth,
-            ));
-        }
-
         let key = self.extract_key(provider)?;
 
         match provider_type {
@@ -834,17 +788,6 @@ impl ProviderAdapter for ClaudeAdapter {
         if base_url == super::CHATGPT_CODEX_BASE_URL {
             let _ = endpoint; // 忽略原始 endpoint
             return format!("{}/responses", super::CHATGPT_CODEX_BASE_URL);
-        }
-
-        // Defense in depth for callers that bypass endpoint rewriting.
-        if base_url == super::XAI_API_BASE_URL {
-            let query = endpoint.split_once('?').map(|(_, query)| query);
-            return match query {
-                Some(query) if !query.is_empty() => {
-                    format!("{}/responses?{query}", super::XAI_API_BASE_URL)
-                }
-                _ => format!("{}/responses", super::XAI_API_BASE_URL),
-            };
         }
 
         // NOTE:
@@ -915,9 +858,6 @@ impl ProviderAdapter for ClaudeAdapter {
                     ),
                 ]
             }
-            AuthStrategy::XaiOAuth => {
-                vec![(HeaderName::from_static("authorization"), hv(&bearer)?)]
-            }
             AuthStrategy::GitHubCopilot => {
                 // 生成请求追踪 ID
                 let request_id = uuid::Uuid::new_v4().to_string();
@@ -976,10 +916,6 @@ impl ProviderAdapter for ClaudeAdapter {
 
         // Codex OAuth 总是需要格式转换 (Anthropic → OpenAI Responses API)
         if self.is_codex_oauth(provider) {
-            return true;
-        }
-
-        if self.is_xai_oauth(provider) {
             return true;
         }
 
@@ -1438,64 +1374,6 @@ mod tests {
         let adapter = ClaudeAdapter::new();
         let url = adapter.build_url("https://api.anthropic.com", "/v1/messages");
         assert_eq!(url, "https://api.anthropic.com/v1/messages");
-    }
-
-    #[test]
-    fn xai_oauth_invariants_ignore_editable_format_and_base_url() {
-        let adapter = ClaudeAdapter::new();
-        let provider = create_provider_with_meta(
-            json!({
-                "env": {
-                    "ANTHROPIC_BASE_URL": "https://attacker.example/anthropic",
-                    "ANTHROPIC_API_KEY": "user-edited"
-                }
-            }),
-            ProviderMeta {
-                provider_type: Some("xai_oauth".to_string()),
-                api_format: Some("anthropic".to_string()),
-                is_full_url: Some(true),
-                ..Default::default()
-            },
-        );
-
-        assert_eq!(get_claude_api_format(&provider), "openai_responses");
-        assert_eq!(adapter.provider_type(&provider), ProviderType::XaiOAuth);
-        assert_eq!(
-            adapter.extract_base_url(&provider).unwrap(),
-            super::super::XAI_API_BASE_URL
-        );
-        assert!(adapter.needs_transform(&provider));
-        assert_eq!(
-            adapter
-                .extract_auth(&provider)
-                .expect("managed auth placeholder")
-                .strategy,
-            AuthStrategy::XaiOAuth
-        );
-        assert_eq!(
-            adapter.build_url(super::super::XAI_API_BASE_URL, "/v1/messages?beta=1"),
-            "https://api.x.ai/v1/responses?beta=1"
-        );
-
-        let transformed = transform_claude_request_for_api_format(
-            json!({
-                "model": "grok-4.5",
-                "max_tokens": 2048,
-                "thinking": { "type": "enabled", "budget_tokens": 20000 },
-                "messages": [{ "role": "user", "content": "hello" }]
-            }),
-            &provider,
-            "openai_responses",
-            None,
-            None,
-        )
-        .unwrap();
-        assert_eq!(transformed["reasoning"]["effort"], json!("high"));
-        assert_eq!(
-            transformed["include"],
-            json!(["reasoning.encrypted_content"])
-        );
-        assert!(transformed.get("store").is_none());
     }
 
     #[test]
@@ -2118,9 +1996,7 @@ mod tests {
     }
 
     #[test]
-    fn test_transform_openai_chat_skips_reasoning_content_for_kimi_provider() {
-        // Kimi 2026-08 反馈：不再需要 reasoning_content 回放，注入反而扰乱思维链。
-        // Kimi/Moonshot 已从 REASONING_VENDOR_HINTS 撤出，应与通用 provider 同行为。
+    fn test_transform_openai_chat_preserves_reasoning_content_for_kimi_provider() {
         let provider = create_provider_with_meta(
             json!({
                 "env": {
@@ -2150,8 +2026,8 @@ mod tests {
                 .unwrap();
 
         let msg = &transformed["messages"][0];
+        assert_eq!(msg["reasoning_content"], "I should call the tool.");
         assert!(msg.get("tool_calls").is_some());
-        assert!(msg.get("reasoning_content").is_none());
     }
 
     #[test]
@@ -2317,9 +2193,7 @@ mod tests {
     }
 
     #[test]
-    fn test_kimi_anthropic_tool_history_not_modified() {
-        // Kimi 2026-08 反馈：Anthropic 兼容端点不再要求 tool_use 轮回放 thinking，
-        // 注入占位符反而扰乱思维链。Kimi 应走通用透传，请求体一字不动。
+    fn test_kimi_anthropic_tool_history_injects_missing_thinking() {
         let provider = create_provider(json!({
             "env": {
                 "ANTHROPIC_BASE_URL": "https://api.kimi.com/coding",
@@ -2335,7 +2209,6 @@ mod tests {
                 ]
             }]
         });
-        let original = body.clone();
 
         let changed = normalize_anthropic_tool_thinking_history_for_provider(
             &mut body,
@@ -2343,8 +2216,11 @@ mod tests {
             "anthropic",
         );
 
-        assert!(!changed);
-        assert_eq!(body, original);
+        assert!(changed);
+        let content = body["messages"][0]["content"].as_array().unwrap();
+        assert_eq!(content[0]["type"], "thinking");
+        assert_eq!(content[0]["thinking"], ANTHROPIC_THINKING_PLACEHOLDER);
+        assert_eq!(content[1]["type"], "tool_use");
     }
 
     #[test]

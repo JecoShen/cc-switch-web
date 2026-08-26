@@ -15,6 +15,7 @@ pub mod gemini_url;
 pub mod handler_config;
 pub mod handler_context;
 mod handlers;
+mod health;
 pub mod http_client;
 pub mod hyper_client;
 pub(crate) mod json_canonical;
@@ -23,6 +24,7 @@ pub mod media_sanitizer;
 pub mod model_mapper;
 pub mod provider_router;
 pub mod providers;
+pub mod response_handler;
 pub mod response_processor;
 pub(crate) mod server;
 pub mod session;
@@ -31,7 +33,6 @@ pub(crate) mod switch_lock;
 pub mod thinking_budget_rectifier;
 pub mod thinking_optimizer;
 pub mod thinking_rectifier;
-pub(crate) mod tool_media;
 pub(crate) mod types;
 pub mod usage;
 
@@ -45,7 +46,11 @@ pub use error::ProxyError;
 #[allow(unused_imports)]
 pub use provider_router::ProviderRouter;
 #[allow(unused_imports)]
-pub use session::{extract_session_id, SessionIdResult, SessionIdSource};
+pub use response_handler::{NonStreamHandler, ResponseType, StreamHandler};
+#[allow(unused_imports)]
+pub use session::{
+    extract_session_id, ClientFormat, ProxySession, SessionIdResult, SessionIdSource,
+};
 #[allow(unused_imports)]
 pub use types::{ProxyConfig, ProxyServerInfo, ProxyStatus};
 

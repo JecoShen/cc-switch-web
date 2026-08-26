@@ -1,5 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { invoke, listen, type UnlistenFn } from "@/lib/transport";
 import type {
   Provider,
   UniversalProvider,
@@ -43,6 +42,7 @@ export interface ClaudeDesktopStatus {
 export interface ClaudeDesktopDefaultRoute {
   routeId: string;
   envKey: string;
+  displayName: string;
   supports1m: boolean;
 }
 
@@ -107,10 +107,6 @@ export const providersApi = {
     return await invoke("ensure_codex_official_provider");
   },
 
-  async ensureGrokBuildOfficialProvider(): Promise<boolean> {
-    return await invoke("ensure_grokbuild_official_provider");
-  },
-
   async getClaudeDesktopStatus(): Promise<ClaudeDesktopStatus> {
     return await invoke("get_claude_desktop_status");
   },
@@ -133,10 +129,7 @@ export const providersApi = {
   async onSwitched(
     handler: (event: ProviderSwitchEvent) => void,
   ): Promise<UnlistenFn> {
-    return await listen("provider-switched", (event) => {
-      const payload = event.payload as ProviderSwitchEvent;
-      handler(payload);
-    });
+    return await listen<ProviderSwitchEvent>("provider-switched", handler);
   },
 
   /**

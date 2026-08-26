@@ -1,4 +1,15 @@
 fn main() {
+    #[cfg(not(feature = "desktop"))]
+    {
+        return;
+    }
+
+    #[cfg(feature = "desktop")]
+    desktop_build();
+}
+
+#[cfg(feature = "desktop")]
+fn desktop_build() {
     tauri_build::build();
 
     // Windows: Embed Common Controls v6 manifest for test binaries

@@ -13,11 +13,11 @@ import {
 import { useProxyStatus } from "@/hooks/useProxyStatus";
 import { cn } from "@/lib/utils";
 import { useTranslation } from "react-i18next";
-import { getAppLabel, type ProxyAppId } from "@/config/appConfig";
+import type { AppId } from "@/lib/api";
 
 interface FailoverToggleProps {
   className?: string;
-  activeApp: ProxyAppId;
+  activeApp: AppId;
 }
 
 export function FailoverToggle({ className, activeApp }: FailoverToggleProps) {
@@ -33,7 +33,12 @@ export function FailoverToggle({ className, activeApp }: FailoverToggleProps) {
     setEnabled.mutate({ appType: activeApp, enabled: checked });
   };
 
-  const appLabel = getAppLabel(activeApp);
+  const appLabel =
+    activeApp === "claude"
+      ? "Claude"
+      : activeApp === "codex"
+        ? "Codex"
+        : "Gemini";
 
   const tooltipText = !takeoverEnabled
     ? t("failover.tooltip.takeoverRequired", {
@@ -65,7 +70,7 @@ export function FailoverToggle({ className, activeApp }: FailoverToggleProps) {
           className={cn(
             "h-4 w-4 transition-colors",
             isEnabled
-              ? "text-emerald-500 status-heartbeat"
+              ? "text-emerald-500 animate-pulse"
               : "text-muted-foreground",
           )}
         />

@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/transport";
 
 export type ResourceType = "provider" | "prompt" | "mcp" | "skill";
 
@@ -7,15 +7,7 @@ export interface DeepLinkImportRequest {
   resource: ResourceType;
 
   // Common fields
-  app?:
-    | "claude"
-    | "codex"
-    | "gemini"
-    | "grokbuild"
-    | "opencode"
-    | "openclaw"
-    | "hermes"
-    | "pi";
+  app?: "claude" | "codex" | "gemini";
   name?: string;
   enabled?: boolean;
 
@@ -35,7 +27,7 @@ export interface DeepLinkImportRequest {
   description?: string;
 
   // MCP fields
-  apps?: string; // Comma-separated application IDs
+  apps?: string; // "claude,codex,gemini"
 
   // Skill fields
   repo?: string;

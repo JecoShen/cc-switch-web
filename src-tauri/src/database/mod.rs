@@ -34,7 +34,6 @@ mod tests;
 // DAO 类型导出供外部使用
 pub(crate) use dao::providers_seed::{
     is_official_seed_id, CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID, CODEX_OFFICIAL_PROVIDER_ID,
-    GROKBUILD_OFFICIAL_PROVIDER_ID,
 };
 pub(crate) use dao::proxy::{
     validate_cost_multiplier, validate_pricing_source, PRICING_SOURCE_REQUEST,
@@ -53,7 +52,7 @@ use std::sync::Mutex;
 
 /// 当前 Schema 版本号
 /// 每次修改表结构时递增，并在 schema.rs 中添加相应的迁移逻辑
-pub(crate) const SCHEMA_VERSION: i32 = 17;
+pub(crate) const SCHEMA_VERSION: i32 = 13;
 
 /// 安全地序列化 JSON，避免 unwrap panic
 pub(crate) fn to_json_string<T: Serialize>(value: &T) -> Result<String, AppError> {
@@ -100,34 +99,52 @@ impl Database {
     pub fn init() -> Result<Self, AppError> {
         let db_path = get_app_config_dir().join("cc-switch.db");
         let db_exists = db_path.exists();
+        let db_path_display = db_path.display().to_string();
 
         // 确保父目录存在
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
         }
 
-        let conn = Connection::open(&db_path).map_err(|e| AppError::Database(e.to_string()))?;
+        let conn = Connection::open(&db_path).map_err(|e| {
+            AppError::Database(format!(
+                "open sqlite database {db_path_display} failed: {e}"
+            ))
+        })?;
 
         // 启用外键约束
-        conn.execute("PRAGMA foreign_keys = ON;", [])
-            .map_err(|e| AppError::Database(e.to_string()))?;
+        conn.execute("PRAGMA foreign_keys = ON;", []).map_err(|e| {
+            AppError::Database(format!(
+                "enable foreign keys for {db_path_display} failed: {e}"
+            ))
+        })?;
         if !db_exists {
             // For a brand-new database, configure incremental auto-vacuum
             // before creating any tables so no rebuild is needed later.
             conn.execute("PRAGMA auto_vacuum = INCREMENTAL;", [])
-                .map_err(|e| AppError::Database(e.to_string()))?;
+                .map_err(|e| {
+                    AppError::Database(format!(
+                        "configure incremental auto-vacuum for new database {db_path_display} failed: {e}"
+                    ))
+                })?;
         }
         register_db_change_hook(&conn);
 
         let db = Self {
             conn: Mutex::new(conn),
         };
-        db.create_tables()?;
+        db.create_tables().map_err(|e| {
+            AppError::Database(format!("create tables for {db_path_display} failed: {e}"))
+        })?;
 
         // Pre-migration backup: only when upgrading from an existing database
         {
             let conn = lock_conn!(db.conn);
-            let version = Self::get_user_version(&conn)?;
+            let version = Self::get_user_version(&conn).map_err(|e| {
+                AppError::Database(format!(
+                    "read schema version from {db_path_display} failed: {e}"
+                ))
+            })?;
             drop(conn);
             if version > 0 && version < SCHEMA_VERSION {
                 log::info!(
@@ -139,14 +156,19 @@ impl Database {
             }
         }
 
-        db.apply_schema_migrations()?;
+        db.apply_schema_migrations().map_err(|e| {
+            AppError::Database(format!(
+                "apply schema migrations for {db_path_display} failed: {e}"
+            ))
+        })?;
         if let Err(e) = db.ensure_incremental_auto_vacuum() {
             log::warn!("Failed to ensure incremental auto-vacuum: {e}");
         }
-        db.ensure_model_pricing_seeded()?;
-        if let Err(e) = crate::services::model_pricing::sync_local_model_pricing(&db) {
-            log::warn!("Failed to sync local model pricing file: {e}");
-        }
+        db.ensure_model_pricing_seeded().map_err(|e| {
+            AppError::Database(format!(
+                "seed model pricing data into {db_path_display} failed: {e}"
+            ))
+        })?;
 
         // Startup cleanup: prune old logs and reclaim space
         if let Err(e) = db.cleanup_old_stream_check_logs(7) {

@@ -14,9 +14,10 @@ mod deeplink;
 mod error;
 mod gemini_config;
 mod gemini_mcp;
-mod grok_config;
 pub mod hermes_config;
+mod import_export_support;
 mod init_status;
+#[cfg(feature = "desktop")]
 mod lightweight;
 #[cfg(target_os = "linux")]
 mod linux_fix;
@@ -25,40 +26,120 @@ mod model_capabilities;
 mod openclaw_config;
 mod opencode_config;
 mod panic_hook;
-mod pi_config;
 mod prompt;
 mod prompt_files;
 mod provider;
+mod provider_defaults;
 mod proxy;
 mod services;
 mod session_manager;
 mod settings;
 mod store;
-
+#[cfg(feature = "desktop")]
 mod tray;
+mod ui_runtime;
+#[cfg(feature = "desktop")]
 mod usage_events;
+#[cfg(not(feature = "desktop"))]
+mod usage_events {
+    pub fn notify_log_recorded() {}
+}
 mod usage_script;
 
-pub use app_config::{AppType, InstalledSkill, McpApps, McpServer, MultiAppConfig, SkillApps};
-pub use codex_config::{
-    get_codex_auth_path, get_codex_config_path, read_codex_live_settings, write_codex_live_atomic,
+pub use app_config::{
+    AppType, InstalledSkill, McpApps, McpServer, MultiAppConfig, SkillApps, UnmanagedSkill,
 };
+pub use codex_config::{
+    get_codex_auth_path, get_codex_config_dir, get_codex_config_path, write_codex_live_atomic,
+};
+#[cfg(feature = "desktop")]
 pub use commands::open_provider_terminal;
+pub use commands::ModelPricingInfo;
+#[allow(ambiguous_glob_reexports)]
 pub use commands::*;
-pub use config::{get_claude_mcp_path, get_claude_settings_path, read_json_file};
-pub use database::{Database, Profile};
-pub use deeplink::{import_provider_from_deeplink, parse_deeplink_url, DeepLinkImportRequest};
+pub use config::{
+    get_app_config_dir, get_app_config_path, get_claude_config_dir,
+    get_claude_config_status as get_claude_config_status_sync, get_claude_mcp_path,
+    get_claude_settings_path, read_json_file, write_text_file, ConfigStatus,
+};
+pub use database::backup::BackupEntry;
+pub use database::Database;
+pub use database::Profile;
+pub use deeplink::{
+    import_mcp_from_deeplink, import_prompt_from_deeplink, import_provider_from_deeplink,
+    import_skill_from_deeplink, parse_and_merge_config, parse_deeplink_url, DeepLinkImportRequest,
+};
 pub use error::AppError;
-pub use grok_config::get_grok_config_path;
+pub use hermes_config::{HermesMemoryLimits, HermesModelConfig, HermesWriteOutcome, MemoryKind};
+pub use import_export_support::*;
+pub use init_status::SkillsMigrationPayload;
 pub use mcp::{
-    import_from_claude, import_from_codex, import_from_gemini, import_from_grokbuild,
-    remove_server_from_claude, remove_server_from_codex, remove_server_from_gemini,
-    remove_server_from_grokbuild, sync_enabled_to_claude, sync_enabled_to_codex,
-    sync_enabled_to_gemini, sync_single_server_to_claude, sync_single_server_to_codex,
-    sync_single_server_to_gemini, sync_single_server_to_grokbuild,
+    import_from_claude, import_from_codex, import_from_gemini, remove_server_from_claude,
+    remove_server_from_codex, remove_server_from_gemini, sync_enabled_to_claude,
+    sync_enabled_to_codex, sync_enabled_to_gemini, sync_single_server_to_claude,
+    sync_single_server_to_codex, sync_single_server_to_gemini,
 };
 pub use prompt::Prompt;
-pub use provider::{Provider, ProviderMeta};
+pub use provider::{
+    ClaudeDesktopMode, ClaudeDesktopModelRoute, Provider, ProviderMeta, UniversalProvider,
+    UsageData, UsageResult,
+};
+pub use proxy::http_client::{
+    apply_proxy as apply_global_proxy, get_current_proxy_url as get_current_global_proxy_url,
+    validate_proxy as validate_global_proxy,
+};
+pub use proxy::providers::codex_oauth_auth::{
+    CodexOAuthError, CodexOAuthManager, CodexOAuthStatus,
+};
+pub use proxy::providers::copilot_auth::{
+    CopilotAuthError, CopilotAuthManager, CopilotAuthStatus, CopilotModel, CopilotUsageResponse,
+    GitHubAccount, GitHubDeviceCodeResponse,
+};
+pub use proxy::types::{LogConfig, OptimizerConfig, RectifierConfig};
+pub use services::balance::get_balance as fetch_balance;
+pub use services::codex_oauth_models::fetch_models_with_token as fetch_codex_oauth_models_with_token;
+pub use services::coding_plan::get_coding_plan_quota as fetch_coding_plan_quota;
+pub use services::env_checker::{check_env_conflicts, EnvConflict};
+pub use services::env_manager::{delete_env_vars, restore_from_backup, BackupInfo};
+pub use services::model_fetch::{fetch_models, FetchedModel};
+pub use services::omo::{OmoLocalFileData, OmoService, SLIM as OMO_SLIM, STANDARD as OMO_STANDARD};
+pub use services::provider::{
+    import_hermes_providers_from_live, import_openclaw_providers_from_live,
+    import_opencode_providers_from_live, update_toml_common_config_snippet,
+};
+pub use services::s3_auto_sync::AutoSyncSuppressionGuard as S3AutoSyncSuppressionGuard;
+#[cfg(not(feature = "desktop"))]
+pub use services::s3_auto_sync::{
+    set_headless_status_callback as set_s3_auto_sync_status_callback,
+    start_headless_worker as start_s3_auto_sync_worker, HeadlessStatusCallback,
+};
+pub use services::s3_sync::{
+    check_connection as s3_check_connection, download as s3_download,
+    fetch_remote_info as s3_fetch_remote_info, run_with_sync_lock as s3_run_with_sync_lock,
+    upload as s3_upload,
+};
+pub use services::session_usage::{DataSourceSummary, SessionSyncResult};
+pub use services::skill::{DiscoverableSkill, Skill, SkillRepo};
+pub use services::skill::{
+    MigrationResult as SkillMigrationResult, SkillBackupEntry, SkillStorageLocation,
+    SkillUpdateInfo, SkillsShSearchResult,
+};
+pub use services::stream_check::{
+    HealthStatus, StreamCheckConfig, StreamCheckResult, StreamCheckService,
+};
+pub use services::subscription::{
+    get_subscription_quota as fetch_subscription_quota, query_codex_quota, CredentialStatus,
+    SubscriptionQuota,
+};
+pub use services::usage_stats::{
+    DailyStats, LogFilters, ModelStats, PaginatedLogs, ProviderLimitStatus, ProviderStats,
+    RequestLogDetail, UsageSummary, UsageSummaryByApp,
+};
+pub use services::webdav_sync::{
+    check_connection as webdav_check_connection, download as webdav_download,
+    fetch_remote_info as webdav_fetch_remote_info, run_with_sync_lock as webdav_run_with_sync_lock,
+    sync_mutex as webdav_sync_mutex, upload as webdav_upload,
+};
 pub use services::{
     profile::{ProfilePayload, ProfileScope, ProfileService},
     provider::reapply_current_codex_official_live,
@@ -66,22 +147,486 @@ pub use services::{
     ConfigService, EndpointLatency, McpService, PromptService, ProviderService, ProxyService,
     SkillService, SpeedtestService,
 };
-pub use settings::{update_settings, AppSettings};
+pub use session_manager::{
+    DeleteSessionOutcome, DeleteSessionRequest, SessionMessage, SessionMeta,
+};
+pub use settings::{
+    get_effective_current_provider, get_s3_sync_settings, get_settings, get_settings_for_frontend,
+    get_webdav_sync_settings, reload_settings, set_s3_sync_settings, set_webdav_sync_settings,
+    update_s3_sync_status, update_settings, update_webdav_sync_status, AppSettings, S3SyncSettings,
+    WebDavSyncSettings,
+};
 pub use store::AppState;
+
+pub fn sync_post_import(db: std::sync::Arc<Database>) -> Result<(), AppError> {
+    let state = AppState::new(db);
+    ProviderService::sync_current_to_live(&state)?;
+    reload_settings()?;
+    Ok(())
+}
+
+pub fn apply_codex_history_setting_side_effect(enabled: bool) -> Result<(), AppError> {
+    if enabled {
+        codex_history_migration::maybe_migrate_codex_official_history_to_unified_bucket()?;
+    } else {
+        settings::clear_codex_official_history_unify_migration()?;
+        settings::clear_codex_unify_migrate_existing()?;
+    }
+    Ok(())
+}
+
+pub fn has_codex_unify_history_backup() -> bool {
+    codex_history_migration::has_codex_official_history_unify_backup()
+}
+
+pub fn restore_codex_unified_history(
+) -> Result<codex_history_migration::CodexOfficialHistoryRestoreOutcome, AppError> {
+    codex_history_migration::restore_codex_official_history_from_backups()
+}
+
+#[cfg(all(feature = "test-hooks", not(feature = "desktop")))]
+pub fn switch_provider_test_hook(
+    state: &AppState,
+    app_type: AppType,
+    id: &str,
+) -> Result<crate::services::SwitchResult, AppError> {
+    ProviderService::switch(state, app_type, id)
+}
+
+#[cfg(all(feature = "test-hooks", not(feature = "desktop")))]
+pub fn import_default_config_test_hook(
+    state: &AppState,
+    app_type: AppType,
+) -> Result<bool, AppError> {
+    let imported = ProviderService::import_default_config(state, app_type.clone())?;
+
+    if imported {
+        if state
+            .db
+            .should_auto_extract_config_snippet(app_type.as_str())?
+        {
+            match ProviderService::extract_common_config_snippet(state, app_type.clone()) {
+                Ok(snippet) if !snippet.is_empty() && snippet != "{}" => {
+                    let _ = state
+                        .db
+                        .set_config_snippet(app_type.as_str(), Some(snippet));
+                    let _ = state
+                        .db
+                        .set_config_snippet_cleared(app_type.as_str(), false);
+                }
+                _ => {}
+            }
+        }
+
+        ProviderService::migrate_legacy_common_config_usage_if_needed(state, app_type)?;
+    }
+
+    Ok(imported)
+}
+
+#[cfg(all(feature = "test-hooks", not(feature = "desktop")))]
+pub async fn get_default_cost_multiplier_test_hook(
+    state: &AppState,
+    app_type: &str,
+) -> Result<String, AppError> {
+    state.db.get_default_cost_multiplier(app_type).await
+}
+
+#[cfg(all(feature = "test-hooks", not(feature = "desktop")))]
+pub async fn set_default_cost_multiplier_test_hook(
+    state: &AppState,
+    app_type: &str,
+    value: &str,
+) -> Result<(), AppError> {
+    state.db.set_default_cost_multiplier(app_type, value).await
+}
+
+#[cfg(all(feature = "test-hooks", not(feature = "desktop")))]
+pub async fn get_pricing_model_source_test_hook(
+    state: &AppState,
+    app_type: &str,
+) -> Result<String, AppError> {
+    state.db.get_pricing_model_source(app_type).await
+}
+
+#[cfg(all(feature = "test-hooks", not(feature = "desktop")))]
+pub async fn set_pricing_model_source_test_hook(
+    state: &AppState,
+    app_type: &str,
+    value: &str,
+) -> Result<(), AppError> {
+    state.db.set_pricing_model_source(app_type, value).await
+}
+
+pub fn delete_sessions_batch(requests: &[DeleteSessionRequest]) -> Vec<DeleteSessionOutcome> {
+    session_manager::delete_sessions(requests)
+}
+
+pub fn launch_terminal_command(command_line: &str, label: &str) -> Result<(), String> {
+    crate::commands::launch_terminal_running(command_line, label)
+}
+
+pub fn sync_all_session_usage(db: &Database) -> Result<SessionSyncResult, AppError> {
+    let mut result = services::session_usage::sync_claude_session_logs(db)?;
+
+    match services::session_usage_codex::sync_codex_usage(db) {
+        Ok(codex_result) => {
+            result.imported += codex_result.imported;
+            result.skipped += codex_result.skipped;
+            result.files_scanned += codex_result.files_scanned;
+            result.errors.extend(codex_result.errors);
+        }
+        Err(e) => result.errors.push(format!("Codex 同步失败: {e}")),
+    }
+
+    match services::session_usage_gemini::sync_gemini_usage(db) {
+        Ok(gemini_result) => {
+            result.imported += gemini_result.imported;
+            result.skipped += gemini_result.skipped;
+            result.files_scanned += gemini_result.files_scanned;
+            result.errors.extend(gemini_result.errors);
+        }
+        Err(e) => result.errors.push(format!("Gemini 同步失败: {e}")),
+    }
+
+    Ok(result)
+}
+
+pub fn get_usage_data_sources_summary(db: &Database) -> Result<Vec<DataSourceSummary>, AppError> {
+    services::session_usage::get_data_source_breakdown(db)
+}
+
+pub const WEB_COMPAT_TAURI_COMMANDS: &[&str] = &[
+    "get_providers",
+    "get_current_provider",
+    "add_provider",
+    "update_provider",
+    "delete_provider",
+    "switch_provider",
+    "import_default_config",
+    "get_claude_code_config_path",
+    "get_config_dir",
+    "open_config_folder",
+    "pick_directory",
+    "open_external",
+    "get_init_error",
+    "get_migration_result",
+    "get_app_config_path",
+    "open_app_config_folder",
+    "get_claude_common_config_snippet",
+    "set_claude_common_config_snippet",
+    "get_common_config_snippet",
+    "set_common_config_snippet",
+    "read_live_provider_settings",
+    "ensure_claude_desktop_official_provider",
+    "ensure_codex_official_provider",
+    "update_toml_common_config_snippet",
+    "fetch_models_for_config",
+    "import_claude_desktop_providers_from_claude",
+    "get_claude_desktop_status",
+    "get_claude_desktop_default_routes",
+    "auth_start_login",
+    "auth_poll_for_account",
+    "auth_list_accounts",
+    "auth_get_status",
+    "auth_remove_account",
+    "auth_set_default_account",
+    "auth_logout",
+    "copilot_start_device_flow",
+    "copilot_poll_for_auth",
+    "copilot_poll_for_account",
+    "copilot_list_accounts",
+    "copilot_remove_account",
+    "copilot_set_default_account",
+    "copilot_get_auth_status",
+    "copilot_logout",
+    "copilot_is_authenticated",
+    "copilot_get_token",
+    "copilot_get_token_for_account",
+    "copilot_get_models",
+    "copilot_get_models_for_account",
+    "copilot_get_usage",
+    "copilot_get_usage_for_account",
+    "get_settings",
+    "has_codex_unify_history_backup",
+    "restore_codex_unified_history",
+    "save_settings",
+    "get_rectifier_config",
+    "set_rectifier_config",
+    "get_optimizer_config",
+    "set_optimizer_config",
+    "get_log_config",
+    "set_log_config",
+    "get_claude_config_status",
+    "get_config_status",
+    "restart_app",
+    "check_for_updates",
+    "is_portable_mode",
+    "get_claude_plugin_status",
+    "read_claude_plugin_config",
+    "apply_claude_plugin_config",
+    "is_claude_plugin_applied",
+    "apply_claude_onboarding_skip",
+    "clear_claude_onboarding_skip",
+    "get_claude_mcp_status",
+    "read_claude_mcp_config",
+    "upsert_claude_mcp_server",
+    "delete_claude_mcp_server",
+    "validate_mcp_command",
+    "queryProviderUsage",
+    "testUsageScript",
+    "get_subscription_quota",
+    "get_codex_oauth_quota",
+    "get_codex_oauth_models",
+    "get_coding_plan_quota",
+    "get_balance",
+    "get_mcp_config",
+    "upsert_mcp_server_in_config",
+    "delete_mcp_server_in_config",
+    "set_mcp_enabled",
+    "get_mcp_servers",
+    "upsert_mcp_server",
+    "delete_mcp_server",
+    "toggle_mcp_app",
+    "list_profiles",
+    "create_profile",
+    "update_profile",
+    "delete_profile",
+    "clear_current_profile",
+    "apply_profile",
+    "get_prompts",
+    "upsert_prompt",
+    "delete_prompt",
+    "enable_prompt",
+    "import_prompt_from_file",
+    "get_current_prompt_file_content",
+    "test_api_endpoints",
+    "get_custom_endpoints",
+    "add_custom_endpoint",
+    "remove_custom_endpoint",
+    "update_endpoint_last_used",
+    "get_app_config_dir_override",
+    "set_app_config_dir_override",
+    "update_providers_sort_order",
+    "export_config_to_file",
+    "import_config_from_file",
+    "save_file_dialog",
+    "open_file_dialog",
+    "open_zip_file_dialog",
+    "sync_current_providers_live",
+    "create_db_backup",
+    "list_db_backups",
+    "restore_db_backup",
+    "rename_db_backup",
+    "delete_db_backup",
+    "webdav_test_connection",
+    "webdav_sync_upload",
+    "webdav_sync_download",
+    "webdav_sync_save_settings",
+    "webdav_sync_fetch_remote_info",
+    "s3_test_connection",
+    "s3_sync_upload",
+    "s3_sync_download",
+    "s3_sync_save_settings",
+    "s3_sync_fetch_remote_info",
+    "parse_deeplink",
+    "merge_deeplink_config",
+    "import_from_deeplink",
+    "import_from_deeplink_unified",
+    "update_tray_menu",
+    "check_env_conflicts",
+    "delete_env_vars",
+    "restore_env_backup",
+    "get_skills",
+    "get_installed_skills",
+    "get_skill_backups",
+    "delete_skill_backup",
+    "discover_available_skills",
+    "check_skill_updates",
+    "get_skills_for_app",
+    "install_skill",
+    "install_skill_for_app",
+    "uninstall_skill",
+    "uninstall_skill_for_app",
+    "install_skill_unified",
+    "uninstall_skill_unified",
+    "toggle_skill_app",
+    "scan_unmanaged_skills",
+    "import_skills_from_apps",
+    "restore_skill_backup",
+    "update_skill",
+    "migrate_skill_storage",
+    "search_skills_sh",
+    "get_skill_repos",
+    "add_skill_repo",
+    "remove_skill_repo",
+    "install_skills_from_zip",
+    "set_auto_launch",
+    "get_auto_launch_status",
+    "get_universal_providers",
+    "get_universal_provider",
+    "upsert_universal_provider",
+    "delete_universal_provider",
+    "sync_universal_provider",
+    "list_sessions",
+    "get_session_messages",
+    "launch_session_terminal",
+    "delete_session",
+    "delete_sessions",
+    "extract_common_config_snippet",
+    "get_skills_migration_result",
+    "get_tool_versions",
+    "run_tool_lifecycle_action",
+    "probe_tool_installations",
+    "remove_provider_from_live_config",
+    "import_mcp_from_apps",
+    "import_openclaw_providers_from_live",
+    "get_openclaw_live_provider_ids",
+    "get_openclaw_live_provider",
+    "import_hermes_providers_from_live",
+    "get_hermes_live_provider_ids",
+    "get_hermes_model_config",
+    "get_hermes_memory",
+    "set_hermes_memory",
+    "get_hermes_memory_limits",
+    "set_hermes_memory_enabled",
+    "open_hermes_web_ui",
+    "launch_hermes_dashboard",
+    "scan_openclaw_config_health",
+    "get_openclaw_default_model",
+    "set_openclaw_default_model",
+    "get_openclaw_model_catalog",
+    "set_openclaw_model_catalog",
+    "get_openclaw_agents_defaults",
+    "set_openclaw_agents_defaults",
+    "get_openclaw_env",
+    "set_openclaw_env",
+    "get_openclaw_tools",
+    "set_openclaw_tools",
+    "get_global_proxy_url",
+    "set_global_proxy_url",
+    "test_proxy_url",
+    "get_upstream_proxy_status",
+    "scan_local_proxies",
+    "set_window_theme",
+    "read_omo_local_file",
+    "get_current_omo_provider_id",
+    "disable_current_omo",
+    "read_omo_slim_local_file",
+    "get_current_omo_slim_provider_id",
+    "disable_current_omo_slim",
+    "import_opencode_providers_from_live",
+    "get_opencode_live_provider_ids",
+    "open_provider_terminal",
+    "read_workspace_file",
+    "write_workspace_file",
+    "list_daily_memory_files",
+    "read_daily_memory_file",
+    "write_daily_memory_file",
+    "delete_daily_memory_file",
+    "search_daily_memory_files",
+    "open_workspace_directory",
+    "start_proxy_server",
+    "stop_proxy_server",
+    "stop_proxy_with_restore",
+    "get_proxy_takeover_status",
+    "set_proxy_takeover_for_app",
+    "get_proxy_status",
+    "get_proxy_config",
+    "update_proxy_config",
+    "get_global_proxy_config",
+    "update_global_proxy_config",
+    "get_proxy_config_for_app",
+    "update_proxy_config_for_app",
+    "get_default_cost_multiplier",
+    "set_default_cost_multiplier",
+    "get_pricing_model_source",
+    "set_pricing_model_source",
+    "is_proxy_running",
+    "is_live_takeover_active",
+    "switch_proxy_provider",
+    "get_provider_health",
+    "reset_circuit_breaker",
+    "get_circuit_breaker_config",
+    "update_circuit_breaker_config",
+    "get_circuit_breaker_stats",
+    "get_failover_queue",
+    "get_available_providers_for_failover",
+    "add_to_failover_queue",
+    "remove_from_failover_queue",
+    "get_auto_failover_enabled",
+    "set_auto_failover_enabled",
+    "get_usage_summary",
+    "get_usage_summary_by_app",
+    "get_usage_trends",
+    "get_provider_stats",
+    "get_model_stats",
+    "get_request_logs",
+    "get_request_detail",
+    "sync_session_usage",
+    "get_usage_data_sources",
+    "get_model_pricing",
+    "update_model_pricing",
+    "delete_model_pricing",
+    "check_provider_limits",
+    "stream_check_provider",
+    "stream_check_all_providers",
+    "get_stream_check_config",
+    "save_stream_check_config",
+];
+
+// Re-export claude_plugin functions for web server use
+pub use claude_plugin::{
+    claude_config_status, clear_claude_config, is_claude_config_applied, read_claude_config,
+    write_claude_config,
+};
+
+// Re-export claude_mcp functions for web server use
+pub use claude_mcp::{
+    clear_has_completed_onboarding, delete_mcp_server as delete_claude_mcp_server_raw,
+    get_mcp_status as get_claude_mcp_status_raw, read_mcp_json as read_claude_mcp_config_raw,
+    set_has_completed_onboarding, upsert_mcp_server as upsert_claude_mcp_server_raw,
+    validate_command_in_path as validate_mcp_command_raw, McpStatus,
+};
+
+// Re-export gemini_config functions for web server use
+pub use claude_desktop_config::{
+    default_proxy_routes as get_claude_desktop_default_routes_raw,
+    get_status as get_claude_desktop_status_raw, is_claude_safe_model_id,
+    is_compatible_direct_provider, ClaudeDesktopDefaultRoute, ClaudeDesktopStatus,
+    DEFAULT_PROXY_ROUTES,
+};
+pub use gemini_config::{get_gemini_dir, get_gemini_env_path};
+pub use openclaw_config::{
+    get_openclaw_config_path, get_openclaw_dir, OpenClawAgentsDefaults, OpenClawDefaultModel,
+    OpenClawEnvConfig, OpenClawHealthWarning, OpenClawModelCatalogEntry, OpenClawToolsConfig,
+    OpenClawWriteOutcome,
+};
+pub use opencode_config::{get_opencode_config_path, get_opencode_dir};
+pub fn get_opencode_live_provider_ids() -> Result<Vec<String>, String> {
+    crate::opencode_config::get_providers()
+        .map(|providers| providers.keys().cloned().collect())
+        .map_err(|e| e.to_string())
+}
+#[cfg(feature = "desktop")]
 use tauri_plugin_deep_link::DeepLinkExt;
+#[cfg(feature = "desktop")]
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
-#[cfg(target_os = "windows")]
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::{fmt, sync::Arc};
-#[cfg(target_os = "macos")]
+#[cfg(feature = "desktop")]
+use std::sync::Arc;
+#[cfg(all(feature = "desktop", target_os = "macos"))]
 use tauri::image::Image;
+#[cfg(feature = "desktop")]
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
+#[cfg(feature = "desktop")]
 use tauri::RunEvent;
+#[cfg(feature = "desktop")]
 use tauri::{Emitter, Manager};
+#[cfg(feature = "desktop")]
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
-#[cfg(target_os = "windows")]
+#[cfg(all(feature = "desktop", target_os = "windows"))]
 fn set_windows_app_user_model_id(app: &tauri::AppHandle) {
     let app_id = app.config().identifier.clone();
     let wide_app_id: Vec<u16> = app_id.encode_utf16().chain(std::iter::once(0)).collect();
@@ -97,144 +642,36 @@ fn set_windows_app_user_model_id(app: &tauri::AppHandle) {
     }
 }
 
-pub(crate) struct RedactedUrl<'a> {
-    url: &'a str,
-    known_secrets: &'a [String],
-}
+#[cfg(feature = "desktop")]
+fn redact_url_for_log(url_str: &str) -> String {
+    match url::Url::parse(url_str) {
+        Ok(url) => {
+            let mut output = format!("{}://", url.scheme());
+            if let Some(host) = url.host_str() {
+                output.push_str(host);
+            }
+            output.push_str(url.path());
 
-impl fmt::Display for RedactedUrl<'_> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&redact_url_for_log_with_secrets(
-            self.url,
-            self.known_secrets,
-        ))
-    }
-}
+            let mut keys: Vec<String> = url.query_pairs().map(|(k, _)| k.to_string()).collect();
+            keys.sort();
+            keys.dedup();
 
-/// 为日志提供惰性 URL 脱敏包装；只有日志实际输出时才解析和重建 URL。
-pub(crate) fn url_for_log(url: &str) -> RedactedUrl<'_> {
-    RedactedUrl {
-        url,
-        known_secrets: &[],
-    }
-}
+            if !keys.is_empty() {
+                output.push_str("?[keys:");
+                output.push_str(&keys.join(","));
+                output.push(']');
+            }
 
-/// 为持有确切认证材料的调用方提供优先精确匹配、再启发式兜底的 URL 脱敏。
-pub(crate) fn url_for_log_with_secrets<'a>(
-    url: &'a str,
-    known_secrets: &'a [String],
-) -> RedactedUrl<'a> {
-    RedactedUrl { url, known_secrets }
-}
-
-/// 已知密钥参与子串脱敏的最短长度：过短的值(如 "api")当作子串会误伤无关文本，
-/// 所以只对足够长、几乎不可能是普通词的值做替换。
-const MIN_KNOWN_SECRET_LEN: usize = 8;
-
-/// 唯一的密钥脱敏原语：把字符串里出现的、我们确切握有的密钥值替换为 [REDACTED]。
-/// 不做任何“看起来像密钥”的形状猜测——只隐藏已知值，天然收敛、不误伤正常路径。
-pub(crate) fn redact_known_secrets(text: &str, known_secrets: &[String]) -> String {
-    redact_known_secrets_with_min_length(text, known_secrets, MIN_KNOWN_SECRET_LEN)
-}
-
-/// Exact-value redaction for user-visible error text. Unlike URL logging, a
-/// short known credential must still be hidden because the result reaches the
-/// UI rather than a diagnostic-only path.
-pub(crate) fn redact_known_secrets_strict(text: &str, known_secrets: &[String]) -> String {
-    redact_known_secrets_with_min_length(text, known_secrets, 1)
-}
-
-fn redact_known_secrets_with_min_length(
-    text: &str,
-    known_secrets: &[String],
-    minimum_chars: usize,
-) -> String {
-    let mut output = text.to_string();
-    for secret in known_secrets {
-        if secret.chars().count() >= minimum_chars {
-            output = output.replace(secret.as_str(), "[REDACTED]");
+            output
         }
-    }
-    output
-}
-
-/// 无 scheme 的裸 authority 形态(如 `user:pass@host/path`)剥掉 userinfo：
-/// 仅当 `@` 出现在第一个 `/` 之前时才视为凭据。
-fn strip_bare_userinfo(input: &str) -> &str {
-    let authority_end = input.find('/').unwrap_or(input.len());
-    match input[..authority_end].rfind('@') {
-        Some(at) => &input[at + 1..],
-        None => input,
-    }
-}
-
-pub(crate) fn redact_url_for_log(url_str: &str) -> String {
-    redact_url_for_log_with_secrets(url_str, &[])
-}
-
-/// 为日志脱敏 URL：剥掉 userinfo(user:pass@) 与整个 query/fragment，保留
-/// scheme/host/port/path 供诊断(如 base_url 配错路径导致 404)，最后再抹掉已知密钥值。
-pub(crate) fn redact_url_for_log_with_secrets(url_str: &str, known_secrets: &[String]) -> String {
-    let scheme_relative = url_str.starts_with("//");
-    let parsed = if scheme_relative {
-        url::Url::parse(&format!("https:{url_str}"))
-    } else {
-        url::Url::parse(url_str)
-    };
-
-    let sanitized = match parsed {
-        Ok(mut url) if url.has_host() => {
-            let _ = url.set_username("");
-            let _ = url.set_password(None);
-            url.set_query(None);
-            url.set_fragment(None);
-            let rendered = url.as_str();
-            if scheme_relative {
-                rendered
-                    .strip_prefix("https:")
-                    .unwrap_or(rendered)
-                    .to_string()
-            } else {
-                rendered.to_string()
+        Err(_) => {
+            let base = url_str.split('#').next().unwrap_or(url_str);
+            match base.split_once('?') {
+                Some((prefix, _)) => format!("{prefix}?[redacted]"),
+                None => base.to_string(),
             }
         }
-        _ => {
-            // 解析失败(相对路径、含裸 userinfo 的非法 URL 等)：丢掉 query/fragment，
-            // 尽力剥掉 userinfo，其余原样保留。
-            let without_tail = url_str.split(['?', '#']).next().unwrap_or(url_str);
-            strip_bare_userinfo(without_tail).to_string()
-        }
-    };
-
-    redact_known_secrets(&sanitized, known_secrets)
-}
-
-/// 只保留 `scheme://host:port`，丢掉 path/query/userinfo。用于我们手里没有任何
-/// 已知密钥可脱敏 path 的场景——凭据可能整个内嵌在 base_url 的 path 里，此时
-/// 记录 path 无法保证不泄漏，只能退回到 origin。
-pub(crate) fn redact_url_origin_for_log(url_str: &str) -> String {
-    let scheme_relative = url_str.starts_with("//");
-    let parsed = if scheme_relative {
-        url::Url::parse(&format!("https:{url_str}"))
-    } else {
-        url::Url::parse(url_str)
-    };
-
-    match parsed {
-        Ok(url) if url.has_host() => {
-            let authority = &url[url::Position::BeforeHost..url::Position::AfterPort];
-            if scheme_relative {
-                format!("//{authority}")
-            } else {
-                format!("{}://{authority}", url.scheme())
-            }
-        }
-        _ => "[invalid target]".to_string(),
     }
-}
-
-fn runtime_log_level_allows(level: log::Level, max_level: log::LevelFilter) -> bool {
-    max_level.to_level().is_some_and(|maximum| level <= maximum)
 }
 
 /// 统一处理 ccswitch:// 深链接 URL
@@ -242,6 +679,7 @@ fn runtime_log_level_allows(level: log::Level, max_level: log::LevelFilter) -> b
 /// - 解析 URL
 /// - 向前端发射 `deeplink-import` / `deeplink-error` 事件
 /// - 可选：在成功时聚焦主窗口
+#[cfg(feature = "desktop")]
 fn handle_deeplink_url(
     app: &tauri::AppHandle,
     url_str: &str,
@@ -252,10 +690,9 @@ fn handle_deeplink_url(
         return false;
     }
 
-    log::info!(
-        "✓ Deep link URL detected from {source}: {}",
-        url_for_log(url_str)
-    );
+    let redacted_url = redact_url_for_log(url_str);
+    log::info!("✓ Deep link URL detected from {source}: {redacted_url}");
+    log::debug!("Deep link URL (raw) from {source}: {url_str}");
 
     match crate::deeplink::parse_deeplink_url(url_str) {
         Ok(request) => {
@@ -304,6 +741,7 @@ fn handle_deeplink_url(
 }
 
 /// 更新托盘菜单的Tauri命令
+#[cfg(feature = "desktop")]
 #[tauri::command]
 async fn update_tray_menu(
     app: tauri::AppHandle,
@@ -325,7 +763,7 @@ async fn update_tray_menu(
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(feature = "desktop", target_os = "macos"))]
 fn macos_tray_icon() -> Option<Image<'static>> {
     const ICON_BYTES: &[u8] = include_bytes!("../icons/tray/macos/statusbar_template_3x.png");
 
@@ -338,7 +776,8 @@ fn macos_tray_icon() -> Option<Image<'static>> {
     }
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
+#[cfg(feature = "desktop")]
+#[cfg_attr(all(feature = "desktop", mobile), tauri::mobile_entry_point)]
 pub fn run() {
     // 设置 panic hook，在应用崩溃时记录日志到 <app_config_dir>/crash.log（默认 ~/.cc-switch/crash.log）
     panic_hook::setup_panic_hook();
@@ -351,7 +790,7 @@ pub fn run() {
             log::info!("=== Single Instance Callback Triggered ===");
             log::debug!("Args count: {}", args.len());
             for (i, arg) in args.iter().enumerate() {
-                log::debug!("  arg[{i}]: {}", url_for_log(arg));
+                log::debug!("  arg[{i}]: {}", redact_url_for_log(arg));
             }
 
             if crate::lightweight::is_lightweight_mode() {
@@ -384,22 +823,6 @@ pub fn run() {
                 }
             }
         }));
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        let startup_page_handled = AtomicBool::new(false);
-        builder = builder.on_page_load(move |webview, payload| {
-            if webview.label() == "main"
-                && payload.event() == tauri::webview::PageLoadEvent::Finished
-                && payload.url().scheme() != "about"
-                && !startup_page_handled.swap(true, Ordering::Relaxed)
-                && !crate::settings::get_settings().silent_startup
-            {
-                let _ = webview.window().show();
-                log::info!("主页面加载完成，主窗口已显示");
-            }
-        });
     }
 
     let builder = builder
@@ -452,8 +875,21 @@ pub fn run() {
             // 预先刷新 Store 覆盖配置，确保后续路径读取正确（日志/数据库等）
             app_store::refresh_app_config_dir_override(app.handle());
             panic_hook::init_app_config_dir(crate::config::get_app_config_dir());
+            #[cfg(target_os = "windows")]
+            set_windows_app_user_model_id(app.handle());
 
-            // 初始化日志（输出到 <app_config_dir>/logs/cc-switch.log）
+            // 注册 Updater 插件（桌面端）
+            #[cfg(desktop)]
+            {
+                if let Err(e) = app
+                    .handle()
+                    .plugin(tauri_plugin_updater::Builder::new().build())
+                {
+                    // 若配置不完整（如缺少 pubkey），跳过 Updater 而不中断应用
+                    log::warn!("初始化 Updater 插件失败，已跳过：{e}");
+                }
+            }
+            // 初始化日志（单文件输出到 <app_config_dir>/logs/cc-switch.log）
             {
                 use tauri_plugin_log::{RotationStrategy, Target, TargetKind, TimezoneStrategy};
 
@@ -464,16 +900,14 @@ pub fn run() {
                     eprintln!("创建日志目录失败: {e}");
                 }
 
+                // 启动时删除旧日志文件，实现单文件覆盖效果
+                let log_file_path = log_dir.join("cc-switch.log");
+                let _ = std::fs::remove_file(&log_file_path);
+
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
-                        // 底层保留 Trace 能力，便于加载用户配置后动态调高级别。
-                        // 插件注册后会立即把全局级别收紧到 Info，避免启动阶段全量 Trace。
+                        // 初始化为 Trace，允许后续通过 log::set_max_level() 动态调整级别
                         .level(log::LevelFilter::Trace)
-                        // plugin-log 的前端 command 会直达 logger，绕过 log 宏的全局
-                        // max_level；在分发层补一次过滤，确保动态总开关同样约束前端日志。
-                        .filter(|metadata| {
-                            runtime_log_level_allows(metadata.level(), log::max_level())
-                        })
                         .targets([
                             Target::new(TargetKind::Stdout),
                             Target::new(TargetKind::Folder {
@@ -481,36 +915,15 @@ pub fn run() {
                                 file_name: Some("cc-switch".into()),
                             }),
                         ])
-                        // KeepSome(4) 保留 4 个轮转归档，加上当前文件最多约 100 MiB。
-                        // 轮转仅按大小触发；跨重启继续追加，不再丢失上一次运行的日志。
-                        .rotation_strategy(RotationStrategy::KeepSome(4))
-                        .max_file_size(20 * 1024 * 1024)
+                        // 单文件模式：启动时删除旧文件，达到大小时轮转
+                        // 注意：KeepSome(n) 内部会做 n-2 运算，n=1 会导致 usize 下溢
+                        // KeepSome(2) 是最小安全值，表示不保留轮转文件
+                        .rotation_strategy(RotationStrategy::KeepSome(2))
+                        // 单文件大小限制 1GB
+                        .max_file_size(1024 * 1024 * 1024)
                         .timezone_strategy(TimezoneStrategy::UseLocal)
                         .build(),
                 )?;
-
-                // 用户配置存在数据库中，数据库尚未打开时使用保守的 Info 级别。
-                log::set_max_level(log::LevelFilter::Info);
-                log::info!("=== CC Switch v{} started ===", env!("CARGO_PKG_VERSION"));
-            }
-
-            // 首次读取覆盖路径时 logger 尚未可用；此处重放一次，
-            // 让 Store 损坏或路径无效等启动警告能够真正落盘。
-            let _ = app_store::refresh_app_config_dir_override(app.handle());
-
-            #[cfg(target_os = "windows")]
-            set_windows_app_user_model_id(app.handle());
-
-            // 注册 Updater 插件（桌面端）；放在 logger 之后，确保失败可诊断。
-            #[cfg(desktop)]
-            {
-                if let Err(e) = app
-                    .handle()
-                    .plugin(tauri_plugin_updater::Builder::new().build())
-                {
-                    // 若配置不完整（如缺少 pubkey），跳过 Updater 而不中断应用
-                    log::warn!("初始化 Updater 插件失败，已跳过：{e}");
-                }
             }
 
             // 注入 AppHandle 给 usage_events，让无 AppHandle 持有的写日志路径
@@ -606,23 +1019,6 @@ pub fn run() {
                     }
                 }
             };
-
-            // 数据库可用后立即应用持久化日志级别，避免后续服务初始化
-            // 继续使用启动阶段的 Info 回退。损坏配置显式 fail-closed 到 Info。
-            match db.get_log_config() {
-                Ok(log_config) => {
-                    log::set_max_level(log_config.to_level_filter());
-                    log::info!(
-                        "已加载日志配置: enabled={}, level={}",
-                        log_config.enabled,
-                        log_config.level
-                    );
-                }
-                Err(e) => {
-                    log::set_max_level(log::LevelFilter::Info);
-                    log::warn!("读取日志配置失败，已回退到 info: {e}");
-                }
-            }
 
             // 如果有预加载的配置，执行迁移
             if let Some(config) = migration_config {
@@ -832,9 +1228,9 @@ pub fn run() {
                 log::info!("✓ First-run welcome notice pending");
             }
 
-            // 1.6. 自动同步累加模式应用的原生 providers 到数据库
+            // 1.6. 自动同步 OpenCode / OpenClaw 的 live providers 到数据库
             //
-            // additive 模式的 import 函数按 id 幂等——
+            // additive 模式（OpenCode / OpenClaw）的 import 函数按 id 幂等——
             // 新 id 执行导入，已有 id 则更新 settings 和 display name，所以每次
             // 启动都跑是安全的：既保证新装用户开箱可见 live 中的供应商，也让外部
             // 修改的 live 文件能在重启后同步到数据库（与之前依赖前端"导入当前配置"
@@ -862,13 +1258,6 @@ pub fn run() {
                 }
                 Ok(_) => log::debug!("○ No Hermes provider changes from live config"),
                 Err(e) => log::warn!("✗ Failed to import Hermes providers: {e}"),
-            }
-            match crate::services::provider::import_pi_providers_from_live(&app_state) {
-                Ok(count) if count > 0 => {
-                    log::info!("✓ Synced {count} Pi provider(s) from native config");
-                }
-                Ok(_) => log::debug!("○ No Pi provider changes from native config"),
-                Err(e) => log::warn!("✗ Failed to import Pi providers: {e}"),
             }
 
             // 2. OMO 配置导入（当数据库中无 OMO provider 时，从本地文件导入）
@@ -950,14 +1339,6 @@ pub fn run() {
                     Err(e) => log::warn!("✗ Failed to import Gemini MCP: {e}"),
                 }
 
-                match crate::services::mcp::McpService::import_from_grokbuild(&app_state) {
-                    Ok(count) if count > 0 => {
-                        log::info!("✓ Imported {count} MCP server(s) from Grok Build");
-                    }
-                    Ok(_) => log::debug!("○ No Grok Build MCP servers found to import"),
-                    Err(e) => log::warn!("✗ Failed to import Grok Build MCP: {e}"),
-                }
-
                 match crate::services::mcp::McpService::import_from_opencode(&app_state) {
                     Ok(count) if count > 0 => {
                         log::info!("✓ Imported {count} MCP server(s) from OpenCode");
@@ -983,11 +1364,9 @@ pub fn run() {
                     crate::app_config::AppType::Claude,
                     crate::app_config::AppType::Codex,
                     crate::app_config::AppType::Gemini,
-                    crate::app_config::AppType::GrokBuild,
                     crate::app_config::AppType::OpenCode,
                     crate::app_config::AppType::OpenClaw,
                     crate::app_config::AppType::Hermes,
-                    crate::app_config::AppType::Pi,
                 ] {
                     match crate::services::prompt::PromptService::import_from_file_on_first_launch(
                         &app_state,
@@ -1063,7 +1442,7 @@ pub fn run() {
 
                     for (i, url) in urls.iter().enumerate() {
                         let url_str = url.as_str();
-                        log::debug!("  URL[{i}]: {}", url_for_log(url_str));
+                        log::debug!("  URL[{i}]: {}", redact_url_for_log(url_str));
 
                         if handle_deeplink_url(&app_handle, url_str, true, "on_open_url") {
                             break; // Process only first ccswitch:// URL
@@ -1131,6 +1510,19 @@ pub fn run() {
             // 将同一个实例注入到全局状态，避免重复创建导致的不一致
             app.manage(app_state);
 
+            // 从数据库加载日志配置并应用
+            {
+                let db = &app.state::<AppState>().db;
+                if let Ok(log_config) = db.get_log_config() {
+                    log::set_max_level(log_config.to_level_filter());
+                    log::info!(
+                        "已加载日志配置: enabled={}, level={}",
+                        log_config.enabled,
+                        log_config.level
+                    );
+                }
+            }
+
             // 初始化 SkillService
             let skill_service = SkillService::new();
             app.manage(commands::skill::SkillServiceState(Arc::new(skill_service)));
@@ -1149,24 +1541,14 @@ pub fn run() {
 
             // 初始化 CodexOAuthManager (ChatGPT Plus/Pro 反代)
             {
+                use crate::proxy::providers::codex_oauth_auth::CodexOAuthManager;
                 use commands::CodexOAuthState;
-
-                let codex_oauth_manager =
-                    app.state::<AppState>().codex_oauth_manager.clone();
-                app.manage(CodexOAuthState(codex_oauth_manager));
-                log::info!("✓ CodexOAuthManager initialized");
-            }
-
-            // 初始化 xAI OAuthManager (Grok API 反代)
-            {
-                use crate::proxy::providers::xai_oauth_auth::XaiOAuthManager;
-                use commands::XaiOAuthState;
                 use tokio::sync::RwLock;
 
                 let app_config_dir = crate::config::get_app_config_dir();
-                let xai_oauth_manager = XaiOAuthManager::new(app_config_dir);
-                app.manage(XaiOAuthState(Arc::new(RwLock::new(xai_oauth_manager))));
-                log::info!("✓ XaiOAuthManager initialized");
+                let codex_oauth_manager = CodexOAuthManager::new(app_config_dir);
+                app.manage(CodexOAuthState(Arc::new(RwLock::new(codex_oauth_manager))));
+                log::info!("✓ CodexOAuthManager initialized");
             }
 
             // 初始化全局出站代理 HTTP 客户端
@@ -1225,17 +1607,6 @@ pub fn run() {
                     }
                 }
 
-                // 必须排在 auto-extract 之前：先把历史泄漏进 Gemini 共享片段的凭据
-                // 清干净，否则紧接着的提取会基于被污染的 live 再写一遍。
-                if let Err(e) =
-                    crate::services::provider::ProviderService::scrub_leaked_gemini_common_config(
-                        &state,
-                    )
-                    .await
-                {
-                    log::warn!("清理 Gemini 通用配置泄漏凭据失败: {e}");
-                }
-
                 initialize_common_config_snippets(&state);
 
                 // 检查 settings 表中的代理状态，自动恢复代理服务
@@ -1267,42 +1638,59 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     const SESSION_SYNC_INTERVAL_SECS: u64 = 60;
 
-                    async fn run_session_sync(db: std::sync::Arc<crate::database::Database>, backfill: bool) {
-                        let _guard = crate::services::session_usage::session_sync_mutex()
-                            .lock()
-                            .await;
-                        let task = tauri::async_runtime::spawn_blocking(move || {
-                            if backfill {
-                                if let Err(error) = db.backfill_missing_usage_costs() {
-                                    log::warn!("Usage cost startup backfill failed: {error}");
-                                }
-                            }
-                            crate::services::session_usage::sync_all_unlocked(&db)
-                        });
-                        match task.await {
-                            Ok(result) if !result.errors.is_empty() => {
-                                log::warn!(
-                                    "Session usage sync completed with {} error(s)",
-                                    result.errors.len()
-                                );
-                            }
-                            Ok(_) => {}
-                            Err(error) => log::warn!("Session usage blocking task failed: {error}"),
+                    fn run_step<T>(name: &str, result: Result<T, crate::error::AppError>) {
+                        if let Err(e) = result {
+                            log::warn!("{name} failed: {e}");
                         }
                     }
 
-                    // 首次同步（含费用回填）
-                    run_session_sync(db_for_session_sync.clone(), true).await;
+                    let db = &db_for_session_sync;
+
+                    // 首次同步
+                    run_step(
+                        "Usage cost startup backfill",
+                        db.backfill_missing_usage_costs(),
+                    );
+                    run_step(
+                        "Session usage initial sync",
+                        crate::services::session_usage::sync_claude_session_logs(db),
+                    );
+                    run_step(
+                        "Codex usage initial sync",
+                        crate::services::session_usage_codex::sync_codex_usage(db),
+                    );
+                    run_step(
+                        "Gemini usage initial sync",
+                        crate::services::session_usage_gemini::sync_gemini_usage(db),
+                    );
+                    run_step(
+                        "OpenCode usage initial sync",
+                        crate::services::session_usage_opencode::sync_opencode_usage(db),
+                    );
 
                     // 定期同步
                     let mut interval = tokio::time::interval(std::time::Duration::from_secs(
                         SESSION_SYNC_INTERVAL_SECS,
                     ));
-                    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                     interval.tick().await; // skip immediate first tick
                     loop {
                         interval.tick().await;
-                        run_session_sync(db_for_session_sync.clone(), false).await;
+                        run_step(
+                            "Session usage periodic sync",
+                            crate::services::session_usage::sync_claude_session_logs(db),
+                        );
+                        run_step(
+                            "Codex usage periodic sync",
+                            crate::services::session_usage_codex::sync_codex_usage(db),
+                        );
+                        run_step(
+                            "Gemini usage periodic sync",
+                            crate::services::session_usage_gemini::sync_gemini_usage(db),
+                        );
+                        run_step(
+                            "OpenCode usage periodic sync",
+                            crate::services::session_usage_opencode::sync_opencode_usage(db),
+                        );
                     }
                 });
             });
@@ -1339,11 +1727,7 @@ pub fn run() {
                     log::info!("静默启动模式：主窗口已隐藏");
                 } else {
                     // 正常启动模式：显示窗口
-                    #[cfg(not(target_os = "windows"))]
                     let _ = window.show();
-                    #[cfg(target_os = "windows")]
-                    log::info!("正常启动模式：等待主页面加载完成后显示主窗口");
-                    #[cfg(not(target_os = "windows"))]
                     log::info!("正常启动模式：主窗口已显示");
 
                     // Linux: 解决首次启动 UI 无响应问题（Tauri #10746 + wry #637）。
@@ -1373,7 +1757,6 @@ pub fn run() {
             commands::import_claude_desktop_providers_from_claude,
             commands::ensure_claude_desktop_official_provider,
             commands::ensure_codex_official_provider,
-            commands::ensure_grokbuild_official_provider,
             commands::get_claude_config_status,
             commands::get_config_status,
             commands::get_claude_code_config_path,
@@ -1430,8 +1813,6 @@ pub fn run() {
             commands::get_subscription_quota,
             commands::get_codex_oauth_quota,
             commands::get_codex_oauth_models,
-            commands::get_xai_oauth_models,
-            commands::get_xai_oauth_quota,
             commands::get_coding_plan_quota,
             commands::get_balance,
             // New MCP via config.json (SSOT)
@@ -1452,16 +1833,6 @@ pub fn run() {
             commands::enable_prompt,
             commands::import_prompt_from_file,
             commands::get_current_prompt_file_content,
-            commands::get_pi_prompt_file,
-            commands::replace_pi_prompt_file,
-            commands::delete_pi_prompt_file,
-            commands::list_pi_prompt_templates,
-            commands::upsert_pi_prompt_template,
-            commands::delete_pi_prompt_template,
-            // Pi native provider and session views
-            commands::get_pi_current_state,
-            commands::update_pi_provider_usage_script,
-            commands::get_pi_session_discovery,
             // Profile management (项目配置方案)
             commands::list_profiles,
             commands::create_profile,
@@ -1471,7 +1842,6 @@ pub fn run() {
             commands::apply_profile,
             // model list fetch (OpenAI-compatible /v1/models)
             commands::fetch_models_for_config,
-            commands::get_opencode_models,
             // ours: endpoint speed test + custom endpoint management
             commands::test_api_endpoints,
             commands::get_custom_endpoints,
@@ -1588,15 +1958,10 @@ pub fn run() {
             commands::get_request_detail,
             commands::get_model_pricing,
             commands::update_model_pricing,
-            commands::update_model_pricing_batch,
             commands::delete_model_pricing,
-            commands::get_models_dev_sync_config,
-            commands::save_models_dev_sync_config,
-            commands::record_models_dev_sync_result,
             commands::check_provider_limits,
             // Session usage sync
             commands::sync_session_usage,
-            commands::rebuild_codex_usage,
             commands::get_usage_data_sources,
             // Stream health check
             commands::stream_check_provider,
@@ -1791,10 +2156,7 @@ pub fn run() {
                 RunEvent::Opened { urls } => {
                     if let Some(url) = urls.first() {
                         let url_str = url.to_string();
-                        log::info!(
-                            "RunEvent::Opened with URL: {}",
-                            url_for_log(&url_str)
-                        );
+                        log::info!("RunEvent::Opened with URL: {url_str}");
 
                         if url_str.starts_with("ccswitch://") {
                             if crate::lightweight::is_lightweight_mode() {
@@ -1869,6 +2231,7 @@ pub fn run() {
 /// 在应用退出前检查代理服务器状态，如果正在运行则停止代理并恢复 Live 配置。
 /// 确保 Claude Code/Codex/Gemini 的配置不会处于损坏状态。
 /// 使用 stop_with_restore_keep_state 保留 settings 表中的代理状态，下次启动时自动恢复。
+#[cfg(feature = "desktop")]
 pub async fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
     if let Some(state) = app_handle.try_state::<store::AppState>() {
         let proxy_service = &state.proxy_service;
@@ -1916,6 +2279,7 @@ pub async fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
 /// 触发 tray-icon 内部的 `remove_tray_icon` → `Shell_NotifyIconW(NIM_DELETE)`，
 /// 在进程结束前干净地把图标摘掉。其它平台 `set_visible(false)` 也是
 /// 正常的隐藏/移除语义，作为跨平台兜底也安全。
+#[cfg(feature = "desktop")]
 pub(crate) fn remove_tray_icon_before_exit(app_handle: &tauri::AppHandle) {
     if let Some(tray) = app_handle.tray_by_id(tray::TRAY_ID) {
         if let Err(e) = tray.set_visible(false) {
@@ -1934,25 +2298,17 @@ pub(crate) fn remove_tray_icon_before_exit(app_handle: &tauri::AppHandle) {
 ///
 /// 检查 `proxy_config.enabled` 字段，如果有任一应用的状态为 `true`，
 /// 则自动启动代理服务并接管对应应用的 Live 配置。
-const PROXY_STARTUP_APP_TYPES: [&str; 4] = ["claude", "codex", "gemini", "grokbuild"];
-
-async fn enabled_proxy_apps_on_startup(db: &database::Database) -> Vec<&'static str> {
-    let mut apps = Vec::new();
-    for app_type in PROXY_STARTUP_APP_TYPES {
-        if db
-            .get_proxy_config_for_app(app_type)
-            .await
-            .is_ok_and(|config| config.enabled)
-        {
-            apps.push(app_type);
-        }
-    }
-    apps
-}
-
+#[cfg(feature = "desktop")]
 async fn restore_proxy_state_on_startup(state: &store::AppState) {
     // 收集需要恢复接管的应用列表（从 proxy_config.enabled 读取）
-    let apps_to_restore = enabled_proxy_apps_on_startup(&state.db).await;
+    let mut apps_to_restore = Vec::new();
+    for app_type in ["claude", "codex", "gemini"] {
+        if let Ok(config) = state.db.get_proxy_config_for_app(app_type).await {
+            if config.enabled {
+                apps_to_restore.push(app_type);
+            }
+        }
+    }
 
     if apps_to_restore.is_empty() {
         log::debug!("启动时无需恢复代理状态");
@@ -1986,6 +2342,7 @@ async fn restore_proxy_state_on_startup(state: &store::AppState) {
     }
 }
 
+#[cfg(feature = "desktop")]
 fn initialize_common_config_snippets(state: &store::AppState) {
     // Auto-extract common config snippets from clean live files when snippet is missing.
     // This must run before proxy takeover is restored on startup, otherwise we'd read
@@ -2070,6 +2427,7 @@ fn initialize_common_config_snippets(state: &store::AppState) {
 // ============================================================
 
 /// 检测是否为中文环境
+#[cfg(feature = "desktop")]
 fn is_chinese_locale() -> bool {
     std::env::var("LANG")
         .or_else(|_| std::env::var("LC_ALL"))
@@ -2080,6 +2438,7 @@ fn is_chinese_locale() -> bool {
 
 /// 显示迁移错误对话框
 /// 返回 true 表示用户选择重试，false 表示用户选择退出
+#[cfg(feature = "desktop")]
 fn show_migration_error_dialog(app: &tauri::AppHandle, error: &str) -> bool {
     let title = if is_chinese_locale() {
         "配置迁移失败"
@@ -2131,6 +2490,7 @@ fn show_migration_error_dialog(app: &tauri::AppHandle, error: &str) -> bool {
 
 /// 显示数据库初始化/Schema 迁移失败对话框
 /// 返回 true 表示用户选择重试，false 表示用户选择退出
+#[cfg(feature = "desktop")]
 fn show_database_init_error_dialog(
     app: &tauri::AppHandle,
     db_path: &std::path::Path,
@@ -2205,6 +2565,7 @@ fn show_database_init_error_dialog(
 /// 退出并触发各插件的 `RunEvent::Exit` 钩子；任何与之并发的自定义清理任务都
 /// 可能与插件退出钩子争用同一状态而死锁。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(feature = "desktop")]
 enum ExitRequestAction {
     /// `code` 为 `None`：运行时自动触发（如隐藏窗口的 WebView 被回收导致无存活
     /// 窗口），阻止退出、保持托盘后台运行。
@@ -2216,6 +2577,7 @@ enum ExitRequestAction {
     CleanupAndExit,
 }
 
+#[cfg(feature = "desktop")]
 fn classify_exit_request(code: Option<i32>) -> ExitRequestAction {
     match code {
         None => ExitRequestAction::StayInTray,
@@ -2228,12 +2590,14 @@ fn classify_exit_request(code: Option<i32>) -> ExitRequestAction {
 // 在应用主动退出前显式持久化窗口状态
 // ============================================================
 
+#[cfg(feature = "desktop")]
 fn window_state_flags() -> StateFlags {
     StateFlags::POSITION | StateFlags::SIZE | StateFlags::MAXIMIZED
 }
 
 /// 当前应用的退出路径会拦截 `ExitRequested` 并最终直接 `std::process::exit(0)`，
 /// 这里需要在真正结束进程前手动落盘，避免 window-state 插件的默认退出钩子被绕过。
+#[cfg(feature = "desktop")]
 pub fn save_window_state_before_exit(app_handle: &tauri::AppHandle) {
     if let Err(err) = app_handle.save_window_state(window_state_flags()) {
         log::error!("退出前保存窗口状态失败: {err}");
@@ -2247,6 +2611,7 @@ pub fn save_window_state_before_exit(app_handle: &tauri::AppHandle) {
 /// macOS single-instance 使用 `/tmp/{identifier}.sock`。我们有若干路径会直接
 /// `std::process::exit(0)`，不会触发插件挂在 `RunEvent::Exit` 上的清理钩子。
 /// 重启前主动 destroy 可以避免新进程误连旧 listener 后自行退出。
+#[cfg(feature = "desktop")]
 pub fn destroy_single_instance_lock(app_handle: &tauri::AppHandle) {
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     tauri_plugin_single_instance::destroy(app_handle);
@@ -2262,101 +2627,16 @@ pub fn destroy_single_instance_lock(app_handle: &tauri::AppHandle) {
 /// 有意不调 `AppHandle::cleanup_before_exit()`：它会在调用线程上 Drop 托盘
 /// 图标，而 macOS 的 NSStatusItem 操作要求主线程；`set_visible(false)` 走
 /// `run_item_main_thread` 代理，跨线程安全（见 `remove_tray_icon_before_exit`）。
+#[cfg(feature = "desktop")]
 pub fn restart_process(app_handle: &tauri::AppHandle) -> ! {
     remove_tray_icon_before_exit(app_handle);
     destroy_single_instance_lock(app_handle);
     tauri::process::restart(&app_handle.env());
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop"))]
 mod tests {
-    use super::{
-        classify_exit_request, enabled_proxy_apps_on_startup, redact_url_for_log,
-        redact_url_for_log_with_secrets, redact_url_origin_for_log, runtime_log_level_allows,
-        ExitRequestAction,
-    };
-    use crate::database::Database;
-
-    #[test]
-    fn log_url_redaction_strips_credentials_and_query_keeps_path() {
-        // userinfo 与整个 query 剥离，path 保留用于诊断 base_url 配错。
-        assert_eq!(
-            redact_url_for_log(
-                "https://user:secret@example.com:8443/v1/models?key=top-secret&alt=sse"
-            ),
-            "https://example.com:8443/v1/models"
-        );
-        // scheme-relative 保持形态，userinfo 去掉。
-        assert_eq!(
-            redact_url_for_log("//user:sk-secret@gw.example.com/v1"),
-            "//gw.example.com/v1"
-        );
-        // 无 scheme 的裸 userinfo。
-        assert_eq!(
-            redact_url_for_log("user:sk-secret@gw.example.com/v1"),
-            "gw.example.com/v1"
-        );
-        // 无法解析为绝对 URL 时：丢 query，其余原样保留。
-        assert_eq!(redact_url_for_log("not-a-url?token=secret"), "not-a-url");
-        // 不再对 path 段做“看起来像密钥”的形状猜测，正常路径完整保留。
-        assert_eq!(
-            redact_url_for_log("https://host.example/v1/models/gemini-2.5-pro"),
-            "https://host.example/v1/models/gemini-2.5-pro"
-        );
-    }
-
-    #[test]
-    fn log_url_redaction_replaces_known_secret_values() {
-        // 精确匹配已知密钥值：无论它出现在 path 还是别处都被抹掉。
-        let secrets = vec!["k-9f3a7c2b1e".to_string()];
-        assert_eq!(
-            redact_url_for_log_with_secrets("https://gw.example.com/k-9f3a7c2b1e/v1", &secrets),
-            "https://gw.example.com/[REDACTED]/v1"
-        );
-        // 过短(<8)的已知值不参与子串脱敏，避免误伤 /v1/ 之类的正常路径。
-        let short_secrets = vec!["api".to_string()];
-        assert_eq!(
-            redact_url_for_log_with_secrets("https://api.example.com/v1", &short_secrets),
-            "https://api.example.com/v1"
-        );
-    }
-
-    #[test]
-    fn log_url_origin_drops_path_for_credential_in_path() {
-        // 没有已知密钥可脱敏时，凭据可能整个内嵌在 path，只记 origin。
-        assert_eq!(
-            redact_url_origin_for_log("https://gw.example.com/k-9f3a7c2b1e/v1"),
-            "https://gw.example.com"
-        );
-        assert_eq!(
-            redact_url_origin_for_log("https://user:pass@gw.example.com:8443/secret/v1"),
-            "https://gw.example.com:8443"
-        );
-        assert_eq!(
-            redact_url_origin_for_log("//gw.example.com/secret/v1"),
-            "//gw.example.com"
-        );
-    }
-
-    #[test]
-    fn runtime_log_filter_honors_dynamic_max_level() {
-        assert!(!runtime_log_level_allows(
-            log::Level::Error,
-            log::LevelFilter::Off
-        ));
-        assert!(runtime_log_level_allows(
-            log::Level::Error,
-            log::LevelFilter::Info
-        ));
-        assert!(runtime_log_level_allows(
-            log::Level::Info,
-            log::LevelFilter::Info
-        ));
-        assert!(!runtime_log_level_allows(
-            log::Level::Debug,
-            log::LevelFilter::Info
-        ));
-    }
+    use super::{classify_exit_request, ExitRequestAction};
 
     #[test]
     fn no_code_keeps_app_alive_in_tray() {
@@ -2381,22 +2661,5 @@ mod tests {
             classify_exit_request(Some(1)),
             ExitRequestAction::CleanupAndExit
         );
-    }
-
-    #[tokio::test]
-    async fn startup_restore_includes_enabled_grokbuild_route() {
-        let db = Database::memory().expect("initialize database");
-        let mut config = db
-            .get_proxy_config_for_app("grokbuild")
-            .await
-            .expect("read Grok Build proxy config");
-        config.enabled = true;
-        db.update_proxy_config_for_app(config)
-            .await
-            .expect("enable Grok Build proxy config");
-
-        let apps = enabled_proxy_apps_on_startup(&db).await;
-
-        assert_eq!(apps, vec!["grokbuild"]);
     }
 }

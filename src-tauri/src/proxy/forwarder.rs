@@ -2,10 +2,10 @@
 //!
 //! 负责将请求转发到上游Provider，支持故障转移
 
-use super::hyper_client::{ProxyResponse, MAX_RESPONSE_BODY_BYTES};
+use super::hyper_client::ProxyResponse;
 use super::{
     body_filter::filter_private_params_with_whitelist,
-    content_encoding::{decompress_body_with_limit, get_content_encoding},
+    content_encoding::{decompress_body, get_content_encoding},
     error::*,
     failover_switch::FailoverSwitchManager,
     json_canonical::{canonicalize_value, short_value_hash},
@@ -22,9 +22,13 @@ use super::{
     types::{CopilotOptimizerConfig, OptimizerConfig, ProxyStatus, RectifierConfig},
     ProxyError,
 };
-use crate::commands::{CodexOAuthState, CopilotAuthState, XaiOAuthState};
+#[cfg(feature = "desktop")]
+use crate::commands::{CodexOAuthState, CopilotAuthState};
+#[cfg(feature = "desktop")]
+use crate::proxy::providers::codex_oauth_auth::CodexOAuthManager;
+#[cfg(feature = "desktop")]
 use crate::proxy::providers::copilot_auth::CopilotAuthManager;
-use crate::proxy::providers::xai_oauth_auth::XaiOAuthManager;
+use crate::ui_runtime::UiAppHandle;
 use crate::{
     app_config::AppType,
     provider::{LocalProxyRequestOverrides, Provider},
@@ -34,15 +38,13 @@ use futures::StreamExt;
 use http::Extensions;
 use serde_json::Value;
 use std::sync::Arc;
+#[cfg(feature = "desktop")]
 use tauri::Manager;
 use tokio::sync::RwLock;
 
 const PROXY_AUTH_PLACEHOLDER: &str = "PROXY_MANAGED";
 
-fn validate_codex_official_authorization(
-    headers: &http::HeaderMap,
-    provider: &Provider,
-) -> Result<(), ProxyError> {
+fn validate_codex_official_authorization(headers: &http::HeaderMap) -> Result<(), ProxyError> {
     let authorization = headers
         .get(http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
@@ -54,28 +56,7 @@ fn validate_codex_official_authorization(
         Some(value) if value.contains(PROXY_AUTH_PLACEHOLDER) => Err(ProxyError::AuthError(
             "已切换到 OpenAI 官方供应商，请重启 Codex 或新建会话以加载官方登录配置".to_string(),
         )),
-        Some(_) => {
-            let expected_account_id = provider
-                .meta
-                .as_ref()
-                .and_then(|meta| meta.managed_account_id_for("codex_oauth"))
-                .map(|account_id| account_id.trim().to_string())
-                .filter(|account_id| !account_id.is_empty());
-            if let Some(expected_account_id) = expected_account_id {
-                let request_account_id = headers
-                    .get("chatgpt-account-id")
-                    .and_then(|value| value.to_str().ok())
-                    .map(str::trim)
-                    .filter(|account_id| !account_id.is_empty());
-                if request_account_id != Some(expected_account_id.as_str()) {
-                    return Err(ProxyError::AuthError(
-                        "当前 Codex 会话未加载所选 ChatGPT 账号，请重启 Codex 或新建会话后重试"
-                            .to_string(),
-                    ));
-                }
-            }
-            Ok(())
-        }
+        Some(_) => Ok(()),
     }
 }
 
@@ -146,7 +127,7 @@ pub struct RequestForwarder {
     /// 故障转移切换管理器
     failover_manager: Arc<FailoverSwitchManager>,
     /// AppHandle，用于发射事件和更新托盘
-    app_handle: Option<tauri::AppHandle>,
+    app_handle: Option<UiAppHandle>,
     /// 请求开始时的"当前供应商 ID"（用于判断是否需要同步 UI/托盘）
     current_provider_id_at_start: String,
     /// 代理会话 ID（用于 Gemini Native shadow replay）
@@ -226,7 +207,7 @@ impl RequestForwarder {
         gemini_shadow: Arc<GeminiShadowStore>,
         codex_chat_history: Arc<CodexChatHistoryStore>,
         failover_manager: Arc<FailoverSwitchManager>,
-        app_handle: Option<tauri::AppHandle>,
+        app_handle: Option<UiAppHandle>,
         current_provider_id_at_start: String,
         session_id: String,
         session_client_provided: bool,
@@ -418,13 +399,7 @@ impl RequestForwarder {
         providers: Vec<Provider>,
     ) -> Result<ForwardResult, ForwardError> {
         // 获取适配器
-        let adapter = get_adapter(app_type).ok_or_else(|| ForwardError {
-            error: ProxyError::ConfigError(format!(
-                "{} does not support proxy routing",
-                app_type.as_str()
-            )),
-            provider: None,
-        })?;
+        let adapter = get_adapter(app_type);
         let app_type_str = app_type.as_str();
 
         if providers.is_empty() {
@@ -576,7 +551,7 @@ impl RequestForwarder {
                     let provider_type = ProviderType::from_app_type_and_config(app_type, provider);
                     let is_anthropic_provider = matches!(
                         provider_type,
-                        Some(ProviderType::Claude | ProviderType::ClaudeAuth)
+                        ProviderType::Claude | ProviderType::ClaudeAuth
                     );
                     let mut signature_rectifier_non_retryable_client_error = false;
 
@@ -1159,9 +1134,7 @@ impl RequestForwarder {
             .meta
             .as_ref()
             .and_then(|meta| meta.is_full_url)
-            .unwrap_or(false)
-            && !provider.is_codex_oauth()
-            && !provider.is_xai_oauth();
+            .unwrap_or(false);
 
         // GitHub Copilot API 使用 /chat/completions（无 /v1 前缀）
         let is_copilot = provider
@@ -1174,15 +1147,15 @@ impl RequestForwarder {
         // Codex upstream conversion mode — computed early because the [1m]-suffix strip
         // below must be skipped on the Anthropic path (the marker has to survive to
         // catalog matching and to the transform's own strip+beta detection).
-        let codex_responses_to_chat = matches!(app_type, AppType::Codex | AppType::GrokBuild)
+        let codex_responses_to_chat = matches!(app_type, AppType::Codex)
             && super::providers::should_convert_codex_responses_to_chat(provider, endpoint);
-        let codex_responses_to_anthropic = matches!(app_type, AppType::Codex | AppType::GrokBuild)
+        let codex_responses_to_anthropic = matches!(app_type, AppType::Codex)
             && super::providers::should_convert_codex_responses_to_anthropic(provider, endpoint);
         let codex_official_auth_passthrough = matches!(app_type, AppType::Codex)
             && super::providers::is_codex_official_provider(provider);
 
         if codex_official_auth_passthrough {
-            validate_codex_official_authorization(headers, provider)?;
+            validate_codex_official_authorization(headers)?;
         }
 
         // 应用模型映射（独立于格式转换）
@@ -1200,27 +1173,11 @@ impl RequestForwarder {
         // 与 CCH 对齐：请求前不做 thinking 主动改写（仅保留兼容入口）
         let mut mapped_body = normalize_thinking_type(mapped_body);
 
-        // Grok Build exposes a stable client-side model profile in config.toml.
-        // Route requests to the provider's real upstream model before applying
-        // the optional Responses -> Chat/Anthropic bridge.
-        if matches!(app_type, AppType::GrokBuild) {
-            super::providers::apply_codex_upstream_model(provider, &mut mapped_body);
-        }
-
         if is_copilot {
             mapped_body =
                 super::providers::copilot_model_map::apply_copilot_model_normalization(mapped_body);
             self.apply_copilot_live_model_resolution(provider, &mut mapped_body)
                 .await;
-            // Strip the [1M] context marker after Copilot normalization/resolve.
-            // A user's mapped value (e.g. "gpt-5.6-sol[1M]") carries [1M] as a
-            // Claude Code context-capability declaration that upstream APIs reject
-            // as part of the model name. The preceding normalization step already
-            // rewrites claude-xxx[1M] into the "-1m" dash form Copilot accepts, and
-            // the strip helper only touches the "[1m]" bracket form, so "-1m"
-            // variants pass through unchanged.
-            mapped_body =
-                super::model_mapper::strip_one_m_suffix_for_upstream_from_body(mapped_body);
         } else if !codex_responses_to_anthropic {
             // Skip on the Codex→Anthropic path: stripping [1m] here would break both the
             // model-catalog match (apply_codex_upstream_model) and the transform's own
@@ -1335,6 +1292,7 @@ impl RequestForwarder {
         // GitHub Copilot 动态 endpoint 路由
         // 从 CopilotAuthManager 获取缓存的 API endpoint（支持企业版等非默认 endpoint）
         if is_copilot && !is_full_url {
+            #[cfg(feature = "desktop")]
             if let Some(app_handle) = &self.app_handle {
                 let copilot_state = app_handle.state::<CopilotAuthState>();
                 let copilot_auth = copilot_state.0.read().await;
@@ -1424,17 +1382,12 @@ impl RequestForwarder {
         let codex_anthropic_base_is_full_endpoint =
             codex_responses_to_anthropic && base_url_is_full_endpoint(&base_url, "/v1/messages");
 
-        let is_codex_alpha_search = matches!(app_type, AppType::Codex)
-            && split_endpoint_and_query(&effective_endpoint).0 == "/alpha/search";
-
         let url = if matches!(resolved_claude_api_format.as_deref(), Some("gemini_native")) {
             super::gemini_url::resolve_gemini_native_url(
                 &base_url,
                 &effective_endpoint,
                 is_full_url,
             )
-        } else if is_full_url && is_codex_alpha_search {
-            rewrite_codex_alpha_search_full_url(&base_url, passthrough_query.as_deref())?
         } else if is_full_url
             || codex_chat_base_is_full_endpoint
             || codex_anthropic_base_is_full_endpoint
@@ -1564,49 +1517,7 @@ impl RequestForwarder {
             mapped_body
         };
 
-        // Native Responses passthrough to a strict third-party gateway (xAI):
-        // flatten Codex's private `namespace`/plugin tool declarations into
-        // top-level function tools so the upstream's strict serde parser does
-        // not 422 on `unknown variant "namespace"`. The Chat/Anthropic paths
-        // above already unwrap namespaces, so this only fires on the native
-        // passthrough. The response handler restores the flat names using a map
-        // re-derived from the same request tools.
-        if matches!(app_type, AppType::Codex | AppType::GrokBuild)
-            && !codex_responses_to_chat
-            && !codex_responses_to_anthropic
-            && super::providers::provider_needs_responses_namespace_flatten(provider)
-            && super::providers::transform_codex_responses_namespace::flatten_request_namespaces(
-                &mut request_body,
-            )?
-        {
-            log::debug!(
-                "[Codex] Flattened namespace tools for native Responses upstream (provider={})",
-                provider.id
-            );
-        }
-
-        // Same native-Responses path: scrub the OpenAI-backend-private fields
-        // and tool carriers (`external_web_access`, `prompt_cache_retention`,
-        // `additional_tools`, `tool_search`, …) that xAI's strict serde parser
-        // rejects with 400/422. Deterministic field removals only, gated on the
-        // xAI OAuth path, so the prompt-cache prefix stays stable and no other
-        // provider is affected. Runs after the flatten above so lifted
-        // `namespace` tools survive the tool-type whitelist.
-        if matches!(app_type, AppType::Codex | AppType::GrokBuild)
-            && !codex_responses_to_chat
-            && !codex_responses_to_anthropic
-            && super::providers::provider_needs_responses_namespace_flatten(provider)
-            && super::providers::transform_codex_responses_xai_sanitize::sanitize_xai_responses_request(
-                &mut request_body,
-            )
-        {
-            log::debug!(
-                "[Codex] Sanitized xAI-unsupported Responses fields (provider={})",
-                provider.id
-            );
-        }
-
-        if matches!(app_type, AppType::Codex | AppType::GrokBuild) {
+        if matches!(app_type, AppType::Codex) {
             self.apply_media_prevention(&mut request_body, provider);
         }
 
@@ -1651,12 +1562,11 @@ impl RequestForwarder {
         let mut codex_oauth_account_id: Option<String> = None;
         let mut should_send_codex_oauth_session_headers = false;
 
-        // 获取认证头（提前准备，用于内联替换），同时保留仅用于日志脱敏的
-        // 精确认证材料。实际日志永远不输出这些值。
-        let mut log_secrets: Vec<String> = Vec::new();
+        // 获取认证头（提前准备，用于内联替换）
         let mut auth_headers = if let Some(mut auth) = adapter.extract_auth(provider) {
             // GitHub Copilot 特殊处理：从 CopilotAuthManager 获取真实 token
             if auth.strategy == AuthStrategy::GitHubCopilot {
+                #[cfg(feature = "desktop")]
                 if let Some(app_handle) = &self.app_handle {
                     let copilot_state = app_handle.state::<CopilotAuthState>();
                     let copilot_auth: tokio::sync::RwLockReadGuard<'_, CopilotAuthManager> =
@@ -1708,9 +1618,11 @@ impl RequestForwarder {
 
             // Codex OAuth 特殊处理：从 CodexOAuthManager 获取真实 access_token
             if auth.strategy == AuthStrategy::CodexOAuth {
+                #[cfg(feature = "desktop")]
                 if let Some(app_handle) = &self.app_handle {
                     let codex_state = app_handle.state::<CodexOAuthState>();
-                    let codex_auth = &codex_state.0;
+                    let codex_auth: tokio::sync::RwLockReadGuard<'_, CodexOAuthManager> =
+                        codex_state.0.read().await;
 
                     // 从 provider.meta 获取关联的 ChatGPT 账号 ID
                     let account_id = provider
@@ -1755,50 +1667,6 @@ impl RequestForwarder {
                     return Err(ProxyError::AuthError(
                         "Codex OAuth 认证不可用（无 AppHandle）".to_string(),
                     ));
-                }
-            }
-
-            // xAI OAuth: resolve a managed account token immediately before
-            // sending the request. Invalid refresh credentials are persisted as
-            // requiring re-authentication by the manager.
-            if auth.strategy == AuthStrategy::XaiOAuth {
-                if let Some(app_handle) = &self.app_handle {
-                    let xai_state = app_handle.state::<XaiOAuthState>();
-                    let xai_auth: tokio::sync::RwLockReadGuard<'_, XaiOAuthManager> =
-                        xai_state.0.read().await;
-                    let account_id = provider
-                        .meta
-                        .as_ref()
-                        .and_then(|meta| meta.managed_account_id_for("xai_oauth"));
-                    let token_result = match &account_id {
-                        Some(id) => xai_auth.get_valid_token_for_account(id).await,
-                        None => xai_auth.get_valid_token().await,
-                    };
-                    match token_result {
-                        Ok(token) => {
-                            auth = AuthInfo::new(token, AuthStrategy::XaiOAuth);
-                            log::debug!(
-                                "[XaiOAuth] 成功获取 access_token (account={})",
-                                account_id.as_deref().unwrap_or("default")
-                            );
-                        }
-                        Err(error) => {
-                            log::error!("[XaiOAuth] 获取 access_token 失败: {error}");
-                            return Err(ProxyError::AuthError(format!(
-                                "xAI OAuth 认证失败: {error}"
-                            )));
-                        }
-                    }
-                } else {
-                    return Err(ProxyError::AuthError(
-                        "xAI OAuth 认证不可用（无 AppHandle）".to_string(),
-                    ));
-                }
-            }
-
-            for secret in std::iter::once(&auth.api_key).chain(auth.access_token.iter()) {
-                if !secret.is_empty() && !log_secrets.contains(secret) {
-                    log_secrets.push(secret.clone());
                 }
             }
 
@@ -2002,11 +1870,11 @@ impl RequestForwarder {
                 || key_str.eq_ignore_ascii_case("x-api-key")
                 || key_str.eq_ignore_ascii_case("x-goog-api-key")
             {
-                // Codex official account cards deliberately keep credentials
-                // out of provider storage. `requires_openai_auth = true` makes
-                // Codex send the active ChatGPT authorization, which must reach
-                // the official upstream unchanged. Other credential headers
-                // are still discarded.
+                // The built-in Codex official provider deliberately has no
+                // credential in CC Switch. `requires_openai_auth = true` makes
+                // Codex send its native ChatGPT authorization, which must reach
+                // the fixed official upstream unchanged. Other credential
+                // headers are still discarded.
                 if codex_official_auth_passthrough && key_str.eq_ignore_ascii_case("authorization")
                 {
                     saw_auth = true;
@@ -2207,29 +2075,22 @@ impl RequestForwarder {
 
         reject_proxy_placeholder_for_managed_account_upstream(&url, &ordered_headers)?;
 
-        // 日志目标 URL 的脱敏分两种情形：
-        // - 有已知密钥(log_secrets 非空)：记录脱敏后的完整 URL，剥 userinfo/query
-        //   并抹掉已知密钥值，保留 host+path 便于诊断 base_url 配错路径导致的 404。
-        // - 无已知密钥：凭据可能整个内嵌在 path 里且无从脱敏，只记 origin，
-        //   避免默认 Info 级把形如 https://gw/<KEY>/v1 的 path 完整落盘。
-        let target_for_log = if log_secrets.is_empty() {
-            crate::redact_url_origin_for_log(&url)
-        } else {
-            crate::redact_url_for_log_with_secrets(&url, &log_secrets)
-        };
-
         // 输出请求信息日志
         let tag = adapter.name();
         let request_model = filtered_body
             .get("model")
             .and_then(|v| v.as_str())
             .unwrap_or("<none>");
-        log::info!("[{tag}] >>> 请求目标: {target_for_log} (model={request_model})");
-        log::debug!(
-            "[{tag}] >>> 请求体已准备: bytes={}, hash={} (content omitted)",
-            body_bytes.len(),
-            short_value_hash(Some(&filtered_body))
-        );
+        log::info!("[{tag}] >>> 请求 URL: {url} (model={request_model})");
+        if log::log_enabled!(log::Level::Debug) {
+            if let Ok(body_str) = serde_json::to_string(&filtered_body) {
+                log::debug!(
+                    "[{tag}] >>> 请求体内容 ({}字节): {}",
+                    body_str.len(),
+                    body_str
+                );
+            }
+        }
 
         // 确定超时
         let timeout = if self.non_streaming_timeout.is_zero() {
@@ -2296,12 +2157,11 @@ impl RequestForwarder {
         } else {
             // HTTP 代理或直连：走 hyper raw write（保持 header 大小写）
             // 如果有 HTTP 代理，hyper_client 会用 CONNECT 隧道穿过代理
-            let uri: http::Uri = url.parse().map_err(|e| {
-                ProxyError::ForwardFailed(format!("Invalid upstream URL ({target_for_log}): {e}"))
-            })?;
+            let uri: http::Uri = url
+                .parse()
+                .map_err(|e| ProxyError::ForwardFailed(format!("Invalid URL '{url}': {e}")))?;
             super::hyper_client::send_request(
                 uri,
-                &target_for_log,
                 method.clone(),
                 ordered_headers,
                 extensions.clone(),
@@ -2350,16 +2210,13 @@ impl RequestForwarder {
             // 自动解压 feature，这里拿到的是原始字节；不解压的话，压缩过的错误体会
             // 在 from_utf8 处变成非 UTF-8 而被丢弃，隐藏掉上游的限流/鉴权等详情。
             let encoding = get_content_encoding(response.headers());
-            let raw = response.bytes_with_limit(MAX_RESPONSE_BODY_BYTES).await?;
+            let raw = response.bytes().await?;
             let decoded = match encoding {
-                Some(encoding) => {
-                    match decompress_body_with_limit(&encoding, &raw, MAX_RESPONSE_BODY_BYTES) {
-                        Ok(Some(decompressed)) => decompressed,
-                        // 不支持的编码 / 解压失败 / 解压后超限：退回（已有上限的）
-                        // 原始字节，尽量保留可读信息
-                        _ => raw.to_vec(),
-                    }
-                }
+                Some(encoding) => match decompress_body(&encoding, &raw) {
+                    Ok(Some(decompressed)) => decompressed,
+                    // 不支持的编码 / 解压失败：退回原始字节，尽量保留可读信息
+                    _ => raw.to_vec(),
+                },
                 None => raw.to_vec(),
             };
             let body_text = String::from_utf8(decoded).ok();
@@ -2391,17 +2248,14 @@ impl RequestForwarder {
         let status = response.status();
         let headers = response.headers().clone();
         let body_timeout = self.non_streaming_timeout;
-        let body = tokio::time::timeout(
-            body_timeout,
-            response.bytes_with_limit(MAX_RESPONSE_BODY_BYTES),
-        )
-        .await
-        .map_err(|_| {
-            ProxyError::Timeout(format!(
-                "响应体读取超时: {}s（上游发完响应头后 body 未到达）",
-                body_timeout.as_secs()
-            ))
-        })??;
+        let body = tokio::time::timeout(body_timeout, response.bytes())
+            .await
+            .map_err(|_| {
+                ProxyError::Timeout(format!(
+                    "响应体读取超时: {}s（上游发完响应头后 body 未到达）",
+                    body_timeout.as_secs()
+                ))
+            })??;
 
         Ok(ProxyResponse::buffered(status, headers, body))
     }
@@ -2416,14 +2270,12 @@ impl RequestForwarder {
         let status = response.status();
         let headers = response.headers().clone();
         let encoding = get_content_encoding(&headers);
-        let raw = response.bytes_with_limit(MAX_RESPONSE_BODY_BYTES).await?;
+        let raw = response.bytes().await?;
         let decoded = match encoding {
-            Some(encoding) => {
-                match decompress_body_with_limit(&encoding, &raw, MAX_RESPONSE_BODY_BYTES) {
-                    Ok(Some(decompressed)) => decompressed,
-                    _ => raw.to_vec(),
-                }
-            }
+            Some(encoding) => match decompress_body(&encoding, &raw) {
+                Ok(Some(decompressed)) => decompressed,
+                _ => raw.to_vec(),
+            },
             None => raw.to_vec(),
         };
 
@@ -2443,14 +2295,12 @@ impl RequestForwarder {
         let status = response.status();
         let headers = response.headers().clone();
         let encoding = get_content_encoding(&headers);
-        let raw = response.bytes_with_limit(MAX_RESPONSE_BODY_BYTES).await?;
+        let raw = response.bytes().await?;
         let decoded = match encoding {
-            Some(encoding) => {
-                match decompress_body_with_limit(&encoding, &raw, MAX_RESPONSE_BODY_BYTES) {
-                    Ok(Some(decompressed)) => decompressed,
-                    _ => raw.to_vec(),
-                }
-            }
+            Some(encoding) => match decompress_body(&encoding, &raw) {
+                Ok(Some(decompressed)) => decompressed,
+                _ => raw.to_vec(),
+            },
             None => raw.to_vec(),
         };
 
@@ -2605,6 +2455,15 @@ impl RequestForwarder {
 
     /// 用 Copilot live `/models` 列表确认 model ID 真实可用，找不到时按 family 降级。
     /// 命中缓存后是同步的；首次请求或 5 min 缓存过期后会触发一次 HTTP。
+    #[cfg(not(feature = "desktop"))]
+    async fn apply_copilot_live_model_resolution(
+        &self,
+        _provider: &Provider,
+        _body: &mut serde_json::Value,
+    ) {
+    }
+
+    #[cfg(feature = "desktop")]
     async fn apply_copilot_live_model_resolution(
         &self,
         provider: &Provider,
@@ -2646,6 +2505,12 @@ impl RequestForwarder {
         }
     }
 
+    #[cfg(not(feature = "desktop"))]
+    async fn is_copilot_openai_vendor_model(&self, _provider: &Provider, _model_id: &str) -> bool {
+        false
+    }
+
+    #[cfg(feature = "desktop")]
     async fn is_copilot_openai_vendor_model(&self, provider: &Provider, model_id: &str) -> bool {
         let Some(app_handle) = &self.app_handle else {
             log::debug!("[Copilot] AppHandle unavailable, fallback to chat/completions");
@@ -2686,18 +2551,19 @@ impl RequestForwarder {
     }
 
     fn categorize_proxy_error(&self, error: &ProxyError, provider: &Provider) -> ErrorCategory {
-        // Authentication belongs to the Codex client for an official route.
-        // Every retry would reuse the selected account's inbound Authorization
-        // header against another card, so no official-route error may fail over.
-        if super::providers::is_codex_official_provider(provider) {
-            return ErrorCategory::NonRetryable;
-        }
-
-        // xAI OAuth mirrors the same rule for token acquisition: a local
-        // AuthError means the managed account needs re-login. Failing over
-        // would silently move the conversation off the selected Grok account
-        // and poison the provider's health state for an account-level issue.
-        if provider.is_xai_oauth() && matches!(error, ProxyError::AuthError(_)) {
+        // Authentication belongs to the Codex client for the built-in official
+        // route. Retrying another provider would silently move the conversation
+        // away from the selected official account and poison its health state.
+        if super::providers::is_codex_official_provider(provider)
+            && (matches!(error, ProxyError::AuthError(_))
+                || matches!(
+                    error,
+                    ProxyError::UpstreamError {
+                        status: 401 | 403,
+                        ..
+                    }
+                ))
+        {
             return ErrorCategory::NonRetryable;
         }
 
@@ -3229,67 +3095,6 @@ fn append_query_to_full_url(base_url: &str, query: Option<&str>) -> String {
     }
 }
 
-/// Derive the standalone Alpha Search endpoint from a Codex provider configured
-/// with a complete Responses URL.
-///
-/// Full-URL mode normally means "use this exact URL". That is correct for the
-/// request type it was configured for, but reusing a `/responses` URL for an
-/// Alpha Search request silently posts the search payload to the wrong API. Only
-/// rewrite URL shapes whose sibling endpoint is unambiguous; opaque full URLs
-/// fail closed with a configuration error instead of leaking the search payload
-/// to an unrelated route.
-fn rewrite_codex_alpha_search_full_url(
-    base_url: &str,
-    request_query: Option<&str>,
-) -> Result<String, ProxyError> {
-    let trimmed = base_url.trim();
-    let parsed = url::Url::parse(trimmed).map_err(|_| {
-        ProxyError::ConfigError(
-            "Codex Alpha Search requires a valid full Responses URL".to_string(),
-        )
-    })?;
-
-    // Fragments are never sent in HTTP requests. Drop one before splitting the
-    // query so an accidental fragment cannot move the incoming query behind `#`.
-    let without_fragment = trimmed
-        .split_once('#')
-        .map_or(trimmed, |(head, _fragment)| head);
-    let (url_without_query, base_query) = without_fragment
-        .split_once('?')
-        .map_or((without_fragment, None), |(head, query)| {
-            (head, Some(query))
-        });
-    let url_without_query = url_without_query.trim_end_matches('/');
-
-    let parsed_path = parsed.path().trim_end_matches('/').to_string();
-    let suffix = if parsed_path.ends_with("/responses/compact") {
-        "/responses/compact"
-    } else if parsed_path.ends_with("/responses") {
-        "/responses"
-    } else {
-        return Err(ProxyError::ConfigError(
-            "Codex Alpha Search cannot derive /alpha/search from an opaque full URL; use a base URL or a full URL ending in /responses".to_string(),
-        ));
-    };
-
-    let prefix_len = url_without_query
-        .len()
-        .checked_sub(suffix.len())
-        .ok_or_else(|| ProxyError::ConfigError("Invalid Codex full URL".to_string()))?;
-    let mut rewritten = format!("{}/alpha/search", &url_without_query[..prefix_len]);
-
-    let request_query = request_query.filter(|query| !query.is_empty());
-    let base_query = base_query.filter(|query| !query.is_empty());
-    match (base_query, request_query) {
-        (Some(base), Some(request)) => rewritten.push_str(&format!("?{base}&{request}")),
-        (Some(base), None) => rewritten.push_str(&format!("?{base}")),
-        (None, Some(request)) => rewritten.push_str(&format!("?{request}")),
-        (None, None) => {}
-    }
-
-    Ok(rewritten)
-}
-
 fn build_codex_oauth_session_headers(
     session_id: &str,
 ) -> Vec<(http::HeaderName, http::HeaderValue)> {
@@ -3338,7 +3143,6 @@ fn is_managed_account_upstream_url(url: &str) -> bool {
     host == "githubcopilot.com"
         || host.ends_with(".githubcopilot.com")
         || (host == "chatgpt.com" && uri.path().starts_with("/backend-api/codex"))
-        || (host == "api.x.ai" && uri.path().starts_with("/v1/"))
 }
 
 fn headers_contain_proxy_placeholder(headers: &http::HeaderMap) -> bool {
@@ -3360,7 +3164,7 @@ fn should_preserve_exact_header_case(
         return false;
     }
 
-    if is_copilot || provider.is_codex_oauth() || provider.is_xai_oauth() {
+    if is_copilot || provider.is_codex_oauth() {
         return false;
     }
 
@@ -3398,11 +3202,11 @@ fn should_force_identity_encoding(
 
 fn map_reqwest_send_error(error: reqwest::Error) -> ProxyError {
     if error.is_timeout() {
-        ProxyError::Timeout(format!("上游请求超时: {}", error.without_url()))
+        ProxyError::Timeout(format!("请求超时: {error}"))
     } else if error.is_connect() {
-        ProxyError::ForwardFailed(format!("上游连接失败: {}", error.without_url()))
+        ProxyError::ForwardFailed(format!("连接失败: {error}"))
     } else {
-        ProxyError::ForwardFailed(format!("上游请求发送失败: {}", error.without_url()))
+        ProxyError::ForwardFailed(error.to_string())
     }
 }
 
@@ -3602,8 +3406,7 @@ fn log_prompt_cache_trace(
         "[CacheTrace] app={}, provider={}, endpoint={}, api_format={}, session_client_provided={}, prompt_cache_key={}, store={}, stream={}, instructions_hash={}, system_hash={}, tools_hash={}, input_hash={}, messages_hash={}, include_hash={}, cache_controls={}, body_hash={}",
         app_type.as_str(),
         provider.id,
-        // Gemini 的 endpoint 带 ?key=<API_KEY>；脱敏剥掉 query 再落盘。
-        crate::redact_url_for_log(endpoint),
+        endpoint,
         api_format.unwrap_or("native"),
         session_client_provided,
         prompt_cache_key,
@@ -3740,7 +3543,6 @@ mod tests {
         assert_eq!(code, log_fwd::SINGLE_PROVIDER_FAILED);
         assert!(message.contains("Provider PackyCode-response 请求失败"));
         assert!(message.contains("上游 HTTP 429"));
-        // 上游错误消息保留(截断)，用于诊断失败原因。
         assert!(message.contains("rate limit exceeded"));
         assert!(!message.contains("切换下一个"));
     }
@@ -3771,6 +3573,20 @@ mod tests {
         assert_eq!(code, log_fwd::ALL_PROVIDERS_FAILED);
         assert!(message.contains("已尝试 2/2 个 Provider，均失败"));
         assert!(message.contains("connection reset by peer"));
+    }
+
+    #[test]
+    fn summarize_upstream_body_prefers_json_message() {
+        let body = json!({
+            "error": {
+                "message": "invalid_request_error: unsupported field"
+            },
+            "request_id": "req_123"
+        });
+
+        let summary = summarize_upstream_body(&body.to_string());
+
+        assert_eq!(summary, "invalid_request_error: unsupported field");
     }
 
     #[test]
@@ -3988,10 +3804,7 @@ mod tests {
             .expect("response should be buffered");
 
         assert_eq!(
-            prepared
-                .bytes_with_limit(MAX_RESPONSE_BODY_BYTES)
-                .await
-                .unwrap(),
+            prepared.bytes().await.unwrap(),
             Bytes::from_static(b"{\"ok\":true}")
         );
     }
@@ -4036,10 +3849,7 @@ mod tests {
             .expect("stream should be primed");
 
         assert_eq!(
-            prepared
-                .bytes_with_limit(MAX_RESPONSE_BODY_BYTES)
-                .await
-                .unwrap(),
+            prepared.bytes().await.unwrap(),
             Bytes::from_static(b"firstsecond")
         );
     }
@@ -4104,16 +3914,6 @@ mod tests {
 
         assert!(matches!(
             err,
-            ProxyError::AuthError(message) if message.contains("PROXY_MANAGED")
-        ));
-
-        let xai_err = reject_proxy_placeholder_for_managed_account_upstream(
-            "https://api.x.ai/v1/responses",
-            &headers,
-        )
-        .expect_err("xAI placeholder should be rejected before upstream");
-        assert!(matches!(
-            xai_err,
             ProxyError::AuthError(message) if message.contains("PROXY_MANAGED")
         ));
     }
@@ -4479,7 +4279,7 @@ mod tests {
     }
 
     #[test]
-    fn official_codex_failures_are_not_retryable() {
+    fn official_codex_auth_failures_are_not_retryable() {
         let forwarder = test_forwarder(Duration::ZERO, Duration::ZERO);
         let mut provider = test_provider_with_type(None);
         provider.id = "codex-official".to_string();
@@ -4495,11 +4295,6 @@ mod tests {
                 status: 403,
                 body: None,
             },
-            ProxyError::UpstreamError {
-                status: 429,
-                body: None,
-            },
-            ProxyError::Timeout("timeout".to_string()),
         ] {
             assert_eq!(
                 forwarder.categorize_proxy_error(&error, &provider),
@@ -4509,70 +4304,15 @@ mod tests {
     }
 
     #[test]
-    fn xai_oauth_token_auth_failures_are_not_retryable() {
-        let forwarder = test_forwarder(Duration::ZERO, Duration::ZERO);
-        let provider = test_provider_with_type(Some("xai_oauth"));
-
-        // 本地取 token 失败 = 账号级问题（需重新登录），failover 无济于事
-        assert_eq!(
-            forwarder.categorize_proxy_error(
-                &ProxyError::AuthError("xAI OAuth 认证失败".to_string()),
-                &provider,
-            ),
-            ErrorCategory::NonRetryable
-        );
-        // 上游 401/403 保持 Retryable：换 provider 可能持有可用的 key
-        assert_eq!(
-            forwarder.categorize_proxy_error(
-                &ProxyError::UpstreamError {
-                    status: 401,
-                    body: None,
-                },
-                &provider,
-            ),
-            ErrorCategory::Retryable
-        );
-    }
-
-    #[test]
     fn official_codex_rejects_stale_proxy_placeholder_with_restart_hint() {
         let mut headers = HeaderMap::new();
         headers.insert(
             http::header::AUTHORIZATION,
             HeaderValue::from_static("Bearer PROXY_MANAGED"),
         );
-        let mut provider = test_provider_with_type(None);
-        provider.id = "codex-official".to_string();
-        provider.category = Some("official".to_string());
-        let error = validate_codex_official_authorization(&headers, &provider)
+        let error = validate_codex_official_authorization(&headers)
             .expect_err("stale placeholder must be rejected");
         assert!(matches!(error, ProxyError::AuthError(message) if message.contains("重启 Codex")));
-    }
-
-    #[test]
-    fn managed_codex_official_rejects_a_different_session_account() {
-        let mut provider = test_provider_with_type(Some("codex_oauth"));
-        provider.category = Some("official".to_string());
-        provider.meta.as_mut().expect("provider meta").auth_binding =
-            Some(crate::provider::AuthBinding {
-                source: crate::provider::AuthBindingSource::ManagedAccount,
-                auth_provider: Some("codex_oauth".to_string()),
-                account_id: Some("account-b".to_string()),
-            });
-
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            http::header::AUTHORIZATION,
-            HeaderValue::from_static("Bearer account-a-token"),
-        );
-        headers.insert("chatgpt-account-id", HeaderValue::from_static("account-a"));
-        let error = validate_codex_official_authorization(&headers, &provider)
-            .expect_err("a stale Codex session must not cross the account boundary");
-        assert!(matches!(error, ProxyError::AuthError(message) if message.contains("重启 Codex")));
-
-        headers.insert("chatgpt-account-id", HeaderValue::from_static("account-b"));
-        validate_codex_official_authorization(&headers, &provider)
-            .expect("the selected account may pass through");
     }
 
     #[test]
@@ -4662,47 +4402,6 @@ mod tests {
         let url = append_query_to_full_url("https://relay.example/api?foo=bar", Some("x-id=1"));
 
         assert_eq!(url, "https://relay.example/api?foo=bar&x-id=1");
-    }
-
-    #[test]
-    fn alpha_search_rewrites_known_full_responses_urls() {
-        let cases = [
-            (
-                "https://relay.example/v1/responses",
-                "https://relay.example/v1/alpha/search?client_version=0.144.6",
-            ),
-            (
-                "https://relay.example/backend-api/codex/responses/compact/",
-                "https://relay.example/backend-api/codex/alpha/search?client_version=0.144.6",
-            ),
-            (
-                "https://relay.example/custom/%2F/v1/responses?api-version=2026-07",
-                "https://relay.example/custom/%2F/v1/alpha/search?api-version=2026-07&client_version=0.144.6",
-            ),
-        ];
-
-        for (base_url, expected) in cases {
-            assert_eq!(
-                rewrite_codex_alpha_search_full_url(base_url, Some("client_version=0.144.6"))
-                    .expect("known Responses full URL should be rewritable"),
-                expected
-            );
-        }
-    }
-
-    #[test]
-    fn alpha_search_rejects_opaque_full_url_instead_of_misrouting_payload() {
-        let error = rewrite_codex_alpha_search_full_url(
-            "https://relay.example/custom/rpc-endpoint",
-            Some("client_version=0.144.6"),
-        )
-        .expect_err("opaque endpoint must fail closed");
-
-        assert!(matches!(
-            error,
-            ProxyError::ConfigError(message)
-                if message.contains("cannot derive /alpha/search")
-        ));
     }
 
     #[test]
@@ -4940,60 +4639,6 @@ mod tests {
         })
     }
 
-    fn body_with_codex_tool_output_image(stringified: bool) -> Value {
-        let output = json!({
-            "content": [{
-                "type": "input_image",
-                "image_url": "data:image/png;base64,TOOL_OUTPUT_SENTINEL"
-            }]
-        });
-        json!({
-            "model": "any-model",
-            "input": [{
-                "type": "function_call_output",
-                "call_id": "call_1",
-                "output": if stringified {
-                    Value::String(output.to_string())
-                } else {
-                    output
-                }
-            }]
-        })
-    }
-
-    fn body_with_stringified_chat_tool_image() -> Value {
-        let content = json!({
-            "content": [{
-                "type": "image",
-                "mimeType": "image/png",
-                "data": "CHAT_TOOL_SENTINEL"
-            }]
-        })
-        .to_string();
-        json!({
-            "model": "any-model",
-            "messages": [{
-                "role": "tool",
-                "tool_call_id": "call_1",
-                "content": content
-            }]
-        })
-    }
-
-    fn body_with_gemini_image() -> Value {
-        json!({
-            "contents": [{
-                "role": "user",
-                "parts": [{
-                    "inlineData": {
-                        "mimeType": "image/png",
-                        "data": "GEMINI_SENTINEL"
-                    }
-                }]
-            }]
-        })
-    }
-
     fn image_unsupported_error() -> ProxyError {
         ProxyError::UpstreamError {
             status: 400,
@@ -5094,49 +4739,6 @@ mod tests {
         };
 
         assert!(fwd.media_retry_should_trigger("Codex", false, &body, &error));
-    }
-
-    #[test]
-    fn reactive_triggers_for_structured_and_stringified_codex_tool_images() {
-        let fwd = forwarder_with_rectifier(RectifierConfig::default());
-
-        for stringified in [false, true] {
-            let body = body_with_codex_tool_output_image(stringified);
-            assert!(
-                fwd.media_retry_should_trigger("Codex", false, &body, &image_unsupported_error()),
-                "tool-output image should trigger retry (stringified={stringified})"
-            );
-        }
-    }
-
-    #[test]
-    fn reactive_triggers_for_chat_tool_and_gemini_images() {
-        let fwd = forwarder_with_rectifier(RectifierConfig::default());
-
-        assert!(fwd.media_retry_should_trigger(
-            "Claude",
-            false,
-            &body_with_stringified_chat_tool_image(),
-            &image_unsupported_error()
-        ));
-        assert!(fwd.media_retry_should_trigger(
-            "Claude",
-            false,
-            &body_with_gemini_image(),
-            &image_unsupported_error()
-        ));
-    }
-
-    #[test]
-    fn reactive_does_not_treat_context_limit_as_image_rejection() {
-        let fwd = forwarder_with_rectifier(RectifierConfig::default());
-        let body = body_with_codex_tool_output_image(false);
-        let context_error = ProxyError::UpstreamError {
-            status: 400,
-            body: Some(r#"{"error":{"message":"maximum context length exceeded"}}"#.to_string()),
-        };
-
-        assert!(!fwd.media_retry_should_trigger("Codex", false, &body, &context_error));
     }
 
     #[test]

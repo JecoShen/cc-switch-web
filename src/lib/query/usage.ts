@@ -375,7 +375,7 @@ export function useUpdateModelPricing() {
         params.cacheCreationCost,
       ),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: usageKeys.all });
+      queryClient.invalidateQueries({ queryKey: usageKeys.pricing() });
     },
   });
 }
@@ -386,7 +386,7 @@ export function useDeleteModelPricing() {
   return useMutation({
     mutationFn: (modelId: string) => usageApi.deleteModelPricing(modelId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: usageKeys.all });
+      queryClient.invalidateQueries({ queryKey: usageKeys.pricing() });
     },
   });
 }

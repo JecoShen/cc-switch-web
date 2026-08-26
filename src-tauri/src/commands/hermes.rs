@@ -1,5 +1,8 @@
+#[cfg(feature = "desktop")]
 use std::time::Duration;
+#[cfg(feature = "desktop")]
 use tauri::{AppHandle, State};
+#[cfg(feature = "desktop")]
 use tauri_plugin_opener::OpenerExt;
 
 use crate::hermes_config;
@@ -18,6 +21,7 @@ const HERMES_WEB_OFFLINE_ERROR: &str = "hermes_web_offline";
 ///
 /// Hermes uses additive mode — users may already have providers
 /// configured in config.yaml.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn import_hermes_providers_from_live(state: State<'_, AppState>) -> Result<usize, String> {
     crate::services::provider::import_hermes_providers_from_live(state.inner())
@@ -25,6 +29,7 @@ pub fn import_hermes_providers_from_live(state: State<'_, AppState>) -> Result<u
 }
 
 /// Get provider names in the Hermes live config.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn get_hermes_live_provider_ids() -> Result<Vec<String>, String> {
     hermes_config::get_providers()
@@ -33,6 +38,7 @@ pub fn get_hermes_live_provider_ids() -> Result<Vec<String>, String> {
 }
 
 /// Get a single Hermes provider fragment from live config.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn get_hermes_live_provider(
     #[allow(non_snake_case)] providerId: String,
@@ -46,6 +52,7 @@ pub fn get_hermes_live_provider(
 
 /// Get Hermes model config (model section of config.yaml). Read-only — writes
 /// happen implicitly through `apply_switch_defaults` when switching providers.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn get_hermes_model_config() -> Result<Option<hermes_config::HermesModelConfig>, String> {
     hermes_config::get_model_config().map_err(|e| e.to_string())
@@ -55,21 +62,25 @@ pub fn get_hermes_model_config() -> Result<Option<hermes_config::HermesModelConf
 // Memory Files Commands
 // ============================================================================
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn get_hermes_memory(kind: hermes_config::MemoryKind) -> Result<String, String> {
     hermes_config::read_memory(kind).map_err(|e| e.to_string())
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn set_hermes_memory(kind: hermes_config::MemoryKind, content: String) -> Result<(), String> {
     hermes_config::write_memory(kind, &content).map_err(|e| e.to_string())
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn get_hermes_memory_limits() -> Result<hermes_config::HermesMemoryLimits, String> {
     hermes_config::read_memory_limits().map_err(|e| e.to_string())
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn set_hermes_memory_enabled(
     kind: hermes_config::MemoryKind,
@@ -94,6 +105,7 @@ pub fn set_hermes_memory_enabled(
 /// injected into the returned HTML via `window.__HERMES_SESSION_TOKEN__`, so
 /// there is no need (and no way) for CC Switch to inject it — we just open
 /// the URL and let Hermes handle auth.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn open_hermes_web_ui(app: AppHandle, path: Option<String>) -> Result<(), String> {
     let port = std::env::var("HERMES_WEB_PORT")
@@ -133,6 +145,7 @@ pub async fn open_hermes_web_ui(app: AppHandle, path: Option<String>) -> Result<
 /// callers should reinvoke `open_hermes_web_ui` once the server is ready,
 /// since Hermes startup can take several seconds and may fail outright if
 /// the `hermes-agent[web]` extras are missing.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn launch_hermes_dashboard() -> Result<(), String> {
     tokio::task::spawn_blocking(|| {

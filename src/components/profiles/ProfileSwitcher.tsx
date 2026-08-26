@@ -130,7 +130,7 @@ export function ProfileSwitcher({ activeApp }: ProfileSwitcherProps) {
           sideOffset={6}
           className="z-[100] w-64 p-0"
         >
-          <Command label={t("profiles.searchPlaceholder")}>
+          <Command>
             <CommandInput placeholder={t("profiles.searchPlaceholder")} />
             <CommandList>
               <CommandEmpty>{t("profiles.empty")}</CommandEmpty>

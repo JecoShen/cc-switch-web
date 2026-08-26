@@ -54,7 +54,7 @@ const LEGACY_SCHEMA_SQL: &str = r#"
 
 // v3.8.x（schema v1）的真实表结构快照：用于验证从 v3.8.* 升级到当前版本的迁移链路
 // 参考：tag v3.8.3 的 src-tauri/src/database/schema.rs
-pub(super) const V3_8_SCHEMA_V1_SQL: &str = r#"
+const V3_8_SCHEMA_V1_SQL: &str = r#"
     CREATE TABLE providers (
         id TEXT NOT NULL,
         app_type TEXT NOT NULL,
@@ -149,38 +149,6 @@ fn normalize_default(default: &Option<String>) -> Option<String> {
     default
         .as_ref()
         .map(|s| s.trim_matches('\'').trim_matches('"').to_string())
-}
-
-#[test]
-fn deleted_default_skill_repo_is_not_restored() {
-    let db = Database::memory().expect("create memory db");
-
-    assert_eq!(db.init_default_skill_repos().expect("initialize repos"), 4);
-    for repo in db.get_skill_repos().expect("get initialized repos") {
-        db.delete_skill_repo(&repo.owner, &repo.name)
-            .expect("delete repo");
-    }
-    assert!(db.get_skill_repos().expect("get deleted repos").is_empty());
-
-    assert_eq!(
-        db.init_default_skill_repos().expect("reinitialize repos"),
-        0
-    );
-    assert!(db.get_skill_repos().expect("get repos").is_empty());
-}
-
-#[test]
-fn existing_skill_repo_selection_is_not_supplemented() {
-    let db = Database::memory().expect("create memory db");
-    let default_store = crate::services::skill::SkillStore::default();
-    db.save_skill_repo(&default_store.repos[0])
-        .expect("save existing repo");
-
-    assert_eq!(db.init_default_skill_repos().expect("initialize repos"), 0);
-    assert_eq!(db.get_skill_repos().expect("get repos").len(), 1);
-    assert!(db
-        .get_bool_flag("default_skill_repos_initialized")
-        .expect("get initialized flag"));
 }
 
 #[test]
@@ -549,7 +517,7 @@ fn schema_create_tables_repairs_legacy_proxy_config_singleton_to_per_app() {
     let count: i32 = conn
         .query_row("SELECT COUNT(*) FROM proxy_config", [], |r| r.get(0))
         .expect("count rows");
-    assert_eq!(count, 4, "per-app proxy_config should have 4 rows");
+    assert_eq!(count, 3, "per-app proxy_config should have 3 rows");
 
     // 新结构下应能按 app_type 查询
     let _: i32 = conn
@@ -689,7 +657,7 @@ fn migration_from_v3_8_schema_v1_to_current_schema_v3() {
     let proxy_rows: i64 = conn
         .query_row("SELECT COUNT(*) FROM proxy_config", [], |r| r.get(0))
         .expect("count proxy_config rows");
-    assert_eq!(proxy_rows, 4);
+    assert_eq!(proxy_rows, 3);
 
     // model_pricing 应具备默认数据（迁移时会 seed）
     let pricing_rows: i64 = conn
@@ -871,14 +839,13 @@ fn model_pricing_seed_repairs_known_outdated_builtin_prices() {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .expect("query DeepSeek price");
-    // 从远古价 1.68/3.36/0.14 出发要连跳两级才能到位：
-    //   1.68/3.36/0.14 →(2026-07 条目)→ 0.435/0.87/0.003625
-    //                  →(2026-08-16 峰谷调价条目)→ 1.32/3.96/0.044
-    // 这同时锁住了 repair 条目的顺序：新条目必须排在旧条目之后，
-    // 否则老库会停在中间价位，本断言即会失败。
     assert_eq!(
         deepseek,
-        ("1.32".to_string(), "3.96".to_string(), "0.044".to_string())
+        (
+            "0.435".to_string(),
+            "0.87".to_string(),
+            "0.003625".to_string()
+        )
     );
 
     let glm: (String, String, String) = conn

@@ -45,6 +45,7 @@ fn migration_cell() -> &'static RwLock<bool> {
     MIGRATION_SUCCESS.get_or_init(|| RwLock::new(false))
 }
 
+#[allow(dead_code)]
 pub fn set_migration_success() {
     if let Ok(mut guard) = migration_cell().write() {
         *guard = true;
@@ -79,12 +80,14 @@ fn skills_migration_cell() -> &'static RwLock<Option<SkillsMigrationPayload>> {
     SKILLS_MIGRATION_RESULT.get_or_init(|| RwLock::new(None))
 }
 
+#[allow(dead_code)]
 pub fn set_skills_migration_result(count: usize) {
     if let Ok(mut guard) = skills_migration_cell().write() {
         *guard = Some(SkillsMigrationPayload { count, error: None });
     }
 }
 
+#[allow(dead_code)]
 pub fn set_skills_migration_error(error: String) {
     if let Ok(mut guard) = skills_migration_cell().write() {
         *guard = Some(SkillsMigrationPayload {

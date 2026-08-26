@@ -93,12 +93,15 @@ export function SettingsPage({
   } = useSettings();
 
   const {
+    importMode,
     selectedFile,
     status: importStatus,
     errorMessage,
     backupId,
     isImporting,
+    isExporting,
     selectImportFile,
+    setUploadFile,
     importConfig,
     exportConfig,
     clearSelection,
@@ -352,11 +355,9 @@ export function SettingsPage({
                             claudeDir={settings.claudeConfigDir}
                             codexDir={settings.codexConfigDir}
                             geminiDir={settings.geminiConfigDir}
-                            grokDir={settings.grokConfigDir}
                             opencodeDir={settings.opencodeConfigDir}
                             openclawDir={settings.openclawConfigDir}
                             hermesDir={settings.hermesConfigDir}
-                            piDir={settings.piConfigDir}
                             onDirectoryChange={updateDirectory}
                             onBrowseDirectory={browseDirectory}
                             onResetDirectory={resetDirectory}
@@ -383,12 +384,15 @@ export function SettingsPage({
                         </AccordionTrigger>
                         <AccordionContent className="px-6 pb-6 pt-4 border-t border-border/50">
                           <ImportExportSection
+                            importMode={importMode}
                             status={importStatus}
                             selectedFile={selectedFile}
                             errorMessage={errorMessage}
                             backupId={backupId}
                             isImporting={isImporting}
+                            isExporting={isExporting}
                             onSelectFile={selectImportFile}
+                            onSelectUploadFile={setUploadFile}
                             onImport={importConfig}
                             onExport={exportConfig}
                             onClear={clearSelection}

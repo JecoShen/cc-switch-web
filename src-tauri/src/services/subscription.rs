@@ -318,12 +318,6 @@ pub const TIER_MONTHLY: &str = "monthly";
 /// 三处共用同一标识。见 #3651。
 pub const TIER_THIRTY_DAY: &str = "30_day";
 
-/// Grok credit 额度窗口的兜底 tier 名。Grok 账单接口只返回一个 credit 用量
-/// 窗口，`subscription_grok::tier_name_for_reset` 按重置距离优先映射到
-/// `weekly_limit` / `monthly`，两者都不匹配时用此标识；前端 `TIER_I18N_KEYS`
-/// 映射到 `subscription.credits`，tray 归入 "c" 分组。
-pub const TIER_CREDITS: &str = "credits";
-
 /// Gemini 用量分组名称（按模型而非时间窗口）。`classify_gemini_model` 输出。
 pub const TIER_GEMINI_PRO: &str = "gemini_pro";
 pub const TIER_GEMINI_FLASH: &str = "gemini_flash";
@@ -675,7 +669,7 @@ fn unix_ts_to_iso(ts: i64) -> Option<String> {
 /// 参数化 `tool_label` 和 `expired_message` 让该函数可被两个调用点共用：
 /// - `"codex"` + "Please re-login with Codex CLI."（CLI 凭据路径）
 /// - `"codex_oauth"` + "Please re-login via cc-switch."（cc-switch 自管 OAuth 路径）
-pub(crate) async fn query_codex_quota(
+pub async fn query_codex_quota(
     access_token: &str,
     account_id: Option<&str>,
     tool_label: &str,
@@ -1346,7 +1340,6 @@ pub async fn get_subscription_quota(tool: &str) -> Result<SubscriptionQuota, Str
                 }
             }
         }
-        "grokbuild" => crate::services::subscription_grok::get_grok_subscription_quota().await,
         _ => Ok(SubscriptionQuota::not_found(tool)),
     }
 }

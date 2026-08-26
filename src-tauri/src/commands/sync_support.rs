@@ -1,43 +1,17 @@
 use serde_json::{json, Value};
+use std::sync::Arc;
 
+use crate::database::Database;
 use crate::error::AppError;
-use crate::services::{model_pricing, PromptService, ProviderService};
+use crate::services::provider::ProviderService;
 use crate::settings;
 use crate::store::AppState;
 
-pub(crate) fn run_post_import_sync(app_state: &AppState) -> Result<(), AppError> {
-    let mut failures = Vec::new();
-
-    if let Err(error) = ProviderService::sync_current_to_live(app_state) {
-        failures.push(format!("live configuration: {error}"));
-    }
-    if let Err(error) = PromptService::sync_all_to_live(app_state) {
-        failures.push(format!("prompts: {error}"));
-    }
-    if let Err(error) = model_pricing::sync_local_model_pricing(&app_state.db) {
-        failures.push(format!("model pricing: {error}"));
-    }
-    if let Err(error) = settings::reload_settings() {
-        failures.push(format!("settings cache: {error}"));
-    }
-
-    match app_state.db.get_log_config() {
-        Ok(log_config) => log::set_max_level(log_config.to_level_filter()),
-        Err(error) => {
-            log::set_max_level(log::LevelFilter::Info);
-            failures.push(format!("runtime log level: {error}"));
-        }
-    }
-    app_state.usage_cache.invalidate_all();
-
-    if failures.is_empty() {
-        Ok(())
-    } else {
-        Err(AppError::Message(format!(
-            "部分导入后同步失败: {}",
-            failures.join("; ")
-        )))
-    }
+pub fn run_post_import_sync(db: Arc<Database>) -> Result<(), AppError> {
+    let app_state = AppState::new(db);
+    ProviderService::sync_current_to_live(&app_state)?;
+    settings::reload_settings()?;
+    Ok(())
 }
 
 fn post_sync_warning<E: std::fmt::Display>(err: E) -> String {
@@ -49,7 +23,7 @@ fn post_sync_warning<E: std::fmt::Display>(err: E) -> String {
     .to_string()
 }
 
-pub(crate) fn post_sync_warning_from_result(
+pub fn post_sync_warning_from_result(
     result: Result<Result<(), AppError>, String>,
 ) -> Option<String> {
     match result {
@@ -59,7 +33,7 @@ pub(crate) fn post_sync_warning_from_result(
     }
 }
 
-pub(crate) fn attach_warning(mut value: Value, warning: Option<String>) -> Value {
+pub fn attach_warning(mut value: Value, warning: Option<String>) -> Value {
     if let Some(message) = warning {
         if let Some(obj) = value.as_object_mut() {
             obj.insert("warning".to_string(), Value::String(message));
@@ -68,7 +42,7 @@ pub(crate) fn attach_warning(mut value: Value, warning: Option<String>) -> Value
     value
 }
 
-pub(crate) fn success_payload_with_warning(backup_id: String, warning: Option<String>) -> Value {
+pub fn success_payload_with_warning(backup_id: String, warning: Option<String>) -> Value {
     attach_warning(
         json!({
             "success": true,
@@ -77,6 +51,19 @@ pub(crate) fn success_payload_with_warning(backup_id: String, warning: Option<St
         }),
         warning,
     )
+}
+
+pub fn import_database_with_sync<F>(db: Arc<Database>, import: F) -> Result<Value, AppError>
+where
+    F: FnOnce(&Database) -> Result<String, AppError>,
+{
+    let db_for_sync = db.clone();
+    let backup_id = import(&db)?;
+    let warning = post_sync_warning_from_result(Ok(run_post_import_sync(db_for_sync)));
+    if let Some(msg) = warning.as_ref() {
+        log::warn!("[Import] post-import sync warning: {msg}");
+    }
+    Ok(success_payload_with_warning(backup_id, warning))
 }
 
 #[cfg(test)]

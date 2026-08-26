@@ -20,7 +20,6 @@ import { toast } from "sonner";
 import type { Provider } from "@/types";
 import type { AppId } from "@/lib/api";
 import { providersApi } from "@/lib/api/providers";
-import { extractErrorMessage } from "@/utils/errorUtils";
 import { useDragSort } from "@/hooks/useDragSort";
 import {
   useOpenClawLiveProviderIds,
@@ -47,8 +46,6 @@ import { useCallback } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { isTextEditableTarget } from "@/utils/domUtils";
-import { usePiCurrentState } from "@/lib/query/pi";
-import { isProxyAppId } from "@/config/appConfig";
 
 interface ProviderListProps {
   providers: Record<string, Provider>;
@@ -69,7 +66,7 @@ interface ProviderListProps {
   isProxyRunning?: boolean; // 代理服务运行状态
   isProxyTakeover?: boolean; // 代理接管模式（Live配置已被接管）
   activeProviderId?: string; // 代理当前实际使用的供应商 ID（用于故障转移模式下标注绿色边框）
-  onSetAsDefault?: (provider: Provider, modelId?: string) => void; // OpenClaw: set as default model
+  onSetAsDefault?: (provider: Provider) => void; // OpenClaw: set as default model
 }
 
 export function ProviderList({
@@ -148,21 +145,14 @@ export function ProviderList({
     [appId, openclawDefaultModel],
   );
 
-  // Only apps with an explicit local-routing capability participate in
-  // failover. Additive apps such as Pi never query or render this state.
-  const supportsFailover = isProxyAppId(appId);
-  const { data: isAutoFailoverEnabled } = useAutoFailoverEnabled(
-    appId,
-    supportsFailover,
-  );
-  const { data: failoverQueue } = useFailoverQueue(appId, supportsFailover);
+  // 故障转移相关
+  const { data: isAutoFailoverEnabled } = useAutoFailoverEnabled(appId);
+  const { data: failoverQueue } = useFailoverQueue(appId);
   const addToQueue = useAddToFailoverQueue();
   const removeFromQueue = useRemoveFromFailoverQueue();
 
   const isFailoverModeActive =
-    supportsFailover &&
-    isProxyTakeover === true &&
-    isAutoFailoverEnabled === true;
+    isProxyTakeover === true && isAutoFailoverEnabled === true;
 
   const isOpenCode = appId === "opencode";
   const { data: currentOmoId } = useCurrentOmoProviderId(isOpenCode);
@@ -207,20 +197,6 @@ export function ProviderList({
     enabled: appId === "claude-desktop",
     refetchInterval: appId === "claude-desktop" ? 5000 : false,
   });
-  const {
-    data: piCurrentState,
-    isSuccess: isPiCurrentStateSuccess,
-    isError: isPiCurrentStateError,
-    error: piCurrentStateError,
-  } = usePiCurrentState(appId === "pi");
-  const isPiAuthoritativeStateReady = appId !== "pi" || isPiCurrentStateSuccess;
-  const isPiProviderInConfig = useCallback(
-    (provider: Provider): boolean => {
-      if (!isPiAuthoritativeStateReady) return false;
-      return piCurrentState?.enabledProviderIds.includes(provider.id) ?? false;
-    },
-    [isPiAuthoritativeStateReady, piCurrentState],
-  );
 
   // 连通性检查不发真实请求、无封号/计费风险，直接执行（无需确认弹窗）。
   const handleTest = useCallback(
@@ -263,13 +239,8 @@ export function ProviderList({
         toast.info(t("provider.noProviders"));
       }
     },
-    onError: (error: unknown) => {
-      // Tauri invoke 的 reject 值是后端序列化出的纯字符串而非 Error 对象，
-      // 取 .message 只会得到 undefined（空 toast）。
-      toast.error(extractErrorMessage(error) || t("settings.importFailed"));
-      // 导入失败前也可能已产生需要上屏的副作用：GrokBuild 官方登录态下点
-      // 导入，命令层会先补种官方条目、随后才因 live 不可导入而报错。
-      queryClient.invalidateQueries({ queryKey: ["providers", appId] });
+    onError: (error: Error) => {
+      toast.error(error.message);
     },
   });
 
@@ -374,30 +345,6 @@ export function ProviderList({
     return messages;
   }, [appId, claudeDesktopStatus, t]);
 
-  const piStateErrorMessages = [
-    isPiCurrentStateError ? extractErrorMessage(piCurrentStateError) : "",
-  ].filter(Boolean);
-  const piStateErrorNotice =
-    appId === "pi" && piStateErrorMessages.length > 0 ? (
-      <div
-        role="alert"
-        className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-900 dark:text-amber-200"
-      >
-        <div className="flex items-center gap-2 font-medium">
-          <AlertTriangle className="h-4 w-4 shrink-0" />
-          {t("pi.current.readFailed", {
-            defaultValue: "无法读取 Pi 当前配置",
-          })}
-        </div>
-        <p className="mt-1 text-xs leading-relaxed">
-          {t("pi.current.stateUnavailableHint")}
-          {piStateErrorMessages.length > 0
-            ? ` ${piStateErrorMessages.join(" · ")}`
-            : ""}
-        </p>
-      </div>
-    ) : null;
-
   if (isLoading) {
     return (
       <div className="space-y-3">
@@ -413,14 +360,11 @@ export function ProviderList({
 
   if (sortedProviders.length === 0) {
     return (
-      <div className="mt-4 space-y-4">
-        {piStateErrorNotice}
-        <ProviderEmptyState
-          appId={appId}
-          onCreate={appId === "pi" ? undefined : onCreate}
-          onImport={appId === "pi" ? undefined : () => importMutation.mutate()}
-        />
-      </div>
+      <ProviderEmptyState
+        appId={appId}
+        onCreate={onCreate}
+        onImport={() => importMutation.mutate()}
+      />
     );
   }
 
@@ -443,27 +387,21 @@ export function ProviderList({
               isOmoSlim && provider.id === (currentOmoSlimId || "");
             const isHermesCurrent =
               appId === "hermes" && hermesCurrentProviderId === provider.id;
-            const isCurrent =
-              appId === "pi"
-                ? false
-                : isOmo
-                  ? isOmoCurrent
-                  : isOmoSlim
-                    ? isOmoSlimCurrent
-                    : appId === "hermes"
-                      ? isHermesCurrent
-                      : provider.id === currentProviderId;
             return (
               <SortableProviderCard
                 key={provider.id}
                 provider={provider}
-                isCurrent={isCurrent}
-                appId={appId}
-                isInConfig={
-                  appId === "pi"
-                    ? isPiProviderInConfig(provider)
-                    : isProviderInConfig(provider.id)
+                isCurrent={
+                  isOmo
+                    ? isOmoCurrent
+                    : isOmoSlim
+                      ? isOmoSlimCurrent
+                      : appId === "hermes"
+                        ? isHermesCurrent
+                        : provider.id === currentProviderId
                 }
+                appId={appId}
+                isInConfig={isProviderInConfig(provider.id)}
                 isOmo={isOmo}
                 isOmoSlim={isOmoSlim}
                 onSwitch={onSwitch}
@@ -478,40 +416,23 @@ export function ProviderList({
                 onOpenTerminal={onOpenTerminal}
                 onTest={handleTest}
                 isTesting={isChecking(provider.id)}
-                isProxyRunning={supportsFailover && isProxyRunning}
-                isProxyTakeover={supportsFailover && isProxyTakeover}
+                isProxyRunning={isProxyRunning}
+                isProxyTakeover={isProxyTakeover}
                 isAutoFailoverEnabled={isFailoverModeActive}
                 failoverPriority={getFailoverPriority(provider.id)}
                 isInFailoverQueue={isInFailoverQueue(provider.id)}
-                onToggleFailover={
-                  supportsFailover
-                    ? (enabled) => handleToggleFailover(provider.id, enabled)
-                    : undefined
+                onToggleFailover={(enabled) =>
+                  handleToggleFailover(provider.id, enabled)
                 }
-                activeProviderId={
-                  supportsFailover ? activeProviderId : undefined
-                }
+                activeProviderId={activeProviderId}
+                // OpenClaw: default model / Hermes: model.provider === provider.id
                 isDefaultModel={
                   appId === "hermes"
                     ? isHermesCurrent
                     : isProviderDefaultModel(provider.id)
                 }
-                isRemovalProtected={
-                  appId === "pi"
-                    ? false
-                    : appId === "hermes"
-                      ? isHermesCurrent
-                      : appId === "openclaw"
-                        ? isProviderDefaultModel(provider.id)
-                        : false
-                }
-                isStateChangeProtected={
-                  appId === "pi" && !isPiAuthoritativeStateReady
-                }
                 onSetAsDefault={
-                  onSetAsDefault
-                    ? (modelId) => onSetAsDefault(provider, modelId)
-                    : undefined
+                  onSetAsDefault ? () => onSetAsDefault(provider) : undefined
                 }
               />
             );
@@ -523,7 +444,6 @@ export function ProviderList({
 
   return (
     <div className="mt-4 space-y-4">
-      {piStateErrorNotice}
       {claudeDesktopStatusMessages.length > 0 && (
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-900 dark:text-amber-200">
           <div className="flex items-center gap-2 font-medium">
@@ -640,13 +560,11 @@ interface SortableProviderCardProps {
   isAutoFailoverEnabled: boolean;
   failoverPriority?: number;
   isInFailoverQueue: boolean;
-  onToggleFailover?: (enabled: boolean) => void;
+  onToggleFailover: (enabled: boolean) => void;
   activeProviderId?: string;
   // OpenClaw: default model
   isDefaultModel?: boolean;
-  isRemovalProtected?: boolean;
-  isStateChangeProtected?: boolean;
-  onSetAsDefault?: (modelId?: string) => void;
+  onSetAsDefault?: () => void;
 }
 
 function SortableProviderCard({
@@ -676,8 +594,6 @@ function SortableProviderCard({
   onToggleFailover,
   activeProviderId,
   isDefaultModel,
-  isRemovalProtected,
-  isStateChangeProtected,
   onSetAsDefault,
 }: SortableProviderCardProps) {
   const {
@@ -731,8 +647,6 @@ function SortableProviderCard({
         activeProviderId={activeProviderId}
         // OpenClaw: default model
         isDefaultModel={isDefaultModel}
-        isRemovalProtected={isRemovalProtected}
-        isStateChangeProtected={isStateChangeProtected}
         onSetAsDefault={onSetAsDefault}
       />
     </div>

@@ -1,25 +1,46 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
 use serde_json::json;
+#[cfg(feature = "desktop")]
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use crate::error::AppError;
 use crate::services::s3_sync;
-use crate::services::sync_protocol::should_trigger_auto_sync_for_table;
 use crate::settings::{self, S3SyncSettings};
 
 const AUTO_SYNC_DEBOUNCE_MS: u64 = 1000;
 pub(crate) const MAX_AUTO_SYNC_WAIT_MS: u64 = 10_000;
 
 static DB_CHANGE_TX: OnceLock<Sender<String>> = OnceLock::new();
+static HEADLESS_STATUS_CALLBACK: OnceLock<RwLock<Option<HeadlessStatusCallback>>> = OnceLock::new();
 static AUTO_SYNC_SUPPRESS_DEPTH: AtomicUsize = AtomicUsize::new(0);
 
-pub(crate) struct AutoSyncSuppressionGuard;
+pub type HeadlessStatusCallback = Arc<dyn Fn(&str, Option<&str>) + Send + Sync>;
+
+#[cfg(not(feature = "desktop"))]
+pub fn set_headless_status_callback(callback: HeadlessStatusCallback) {
+    let slot = HEADLESS_STATUS_CALLBACK.get_or_init(|| RwLock::new(None));
+    if let Ok(mut current) = slot.write() {
+        *current = Some(callback);
+    }
+}
+
+#[cfg(not(feature = "desktop"))]
+fn emit_headless_status_updated(status: &str, error: Option<&str>) {
+    let callback = HEADLESS_STATUS_CALLBACK
+        .get()
+        .and_then(|slot| slot.read().ok())
+        .and_then(|callback| callback.clone());
+    if let Some(callback) = callback {
+        callback(status, error);
+    }
+}
+
+pub struct AutoSyncSuppressionGuard;
 
 impl AutoSyncSuppressionGuard {
     pub fn new() -> Self {
@@ -42,7 +63,18 @@ pub(crate) fn is_auto_sync_suppressed() -> bool {
 }
 
 pub fn should_trigger_for_table(table: &str) -> bool {
-    should_trigger_auto_sync_for_table(table)
+    let normalized = table.trim().to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "providers"
+            | "provider_endpoints"
+            | "mcp_servers"
+            | "prompts"
+            | "skills"
+            | "skill_repos"
+            | "settings"
+            | "proxy_config"
+    )
 }
 
 pub(crate) fn enqueue_change_signal(tx: &Sender<String>, table: &str) -> bool {
@@ -75,6 +107,7 @@ fn persist_auto_sync_error(settings: &mut S3SyncSettings, error: &AppError) {
     let _ = settings::update_s3_sync_status(settings.status.clone());
 }
 
+#[cfg(feature = "desktop")]
 fn emit_auto_sync_status_updated(app: &AppHandle, status: &str, error: Option<&str>) {
     let payload = match error {
         Some(message) => json!({
@@ -93,6 +126,7 @@ fn emit_auto_sync_status_updated(app: &AppHandle, status: &str, error: Option<&s
     }
 }
 
+#[cfg(feature = "desktop")]
 async fn run_auto_sync_upload(
     db: &crate::database::Database,
     app: &AppHandle,
@@ -134,6 +168,7 @@ pub fn notify_db_changed(table: &str) {
     let _ = enqueue_change_signal(tx, table);
 }
 
+#[cfg(feature = "desktop")]
 pub fn start_worker(db: Arc<crate::database::Database>, app: tauri::AppHandle) {
     if DB_CHANGE_TX.get().is_some() {
         return;
@@ -150,6 +185,7 @@ pub fn start_worker(db: Arc<crate::database::Database>, app: tauri::AppHandle) {
     });
 }
 
+#[cfg(feature = "desktop")]
 async fn run_worker_loop(
     db: Arc<crate::database::Database>,
     mut rx: Receiver<String>,
@@ -179,6 +215,52 @@ async fn run_worker_loop(
     }
 }
 
+#[cfg(not(feature = "desktop"))]
+pub fn start_headless_worker(db: Arc<crate::database::Database>) {
+    if DB_CHANGE_TX.get().is_some() {
+        return;
+    }
+    let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+        log::warn!("[S3][AutoSync] Tokio runtime unavailable; worker not started");
+        return;
+    };
+    let (tx, mut rx) = channel::<String>(1);
+    if DB_CHANGE_TX.set(tx).is_err() {
+        return;
+    }
+    runtime.spawn(async move {
+        while let Some(first_table) = rx.recv().await {
+            let started_at = Instant::now();
+            let mut merged_count = 1usize;
+            while let Some(wait_for) = auto_sync_wait_duration(started_at, Instant::now()) {
+                match tokio::time::timeout(wait_for, rx.recv()).await {
+                    Ok(Some(_)) => merged_count += 1,
+                    Ok(None) => return,
+                    Err(_) => break,
+                }
+            }
+            log::debug!(
+                "[S3][AutoSync] Triggered by table={first_table}, merged_changes={merged_count}"
+            );
+            let mut settings = settings::get_s3_sync_settings();
+            if !should_run_auto_sync(settings.as_ref()) {
+                continue;
+            }
+            let Some(mut sync_settings) = settings.take() else {
+                continue;
+            };
+            match s3_sync::run_with_sync_lock(s3_sync::upload(&db, &mut sync_settings)).await {
+                Ok(_) => emit_headless_status_updated("success", None),
+                Err(error) => {
+                    persist_auto_sync_error(&mut sync_settings, &error);
+                    emit_headless_status_updated("error", Some(&error.to_string()));
+                    log::warn!("[S3][AutoSync] Upload failed: {error}");
+                }
+            }
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -187,21 +269,18 @@ mod tests {
         MAX_AUTO_SYNC_WAIT_MS,
     };
     use crate::settings::S3SyncSettings;
-    use serial_test::serial;
     use std::time::{Duration, Instant};
     use tokio::sync::mpsc::channel;
 
     #[test]
     fn should_trigger_sync_for_config_tables_only() {
         assert!(should_trigger_for_table("providers"));
-        assert!(should_trigger_for_table("profiles"));
         assert!(should_trigger_for_table("settings"));
         assert!(!should_trigger_for_table("proxy_request_logs"));
         assert!(!should_trigger_for_table("provider_health"));
     }
 
     #[test]
-    #[serial]
     fn suppression_guard_enables_and_restores_state() {
         assert!(!is_auto_sync_suppressed());
         {

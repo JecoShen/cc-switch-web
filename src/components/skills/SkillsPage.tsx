@@ -233,19 +233,8 @@ export const SkillsPage = forwardRef<SkillsPageHandle, SkillsPageProps>(
       readmeUrl: s.readmeUrl,
     });
 
-    const handleInstall = async (key: string) => {
-      let skill: DiscoverableSkill | undefined;
-
-      if (searchSource === "skillssh") {
-        const found = accumulatedResults.find((s) => s.key === key);
-        if (found) {
-          skill = toDiscoverableSkill(found);
-        }
-      } else {
-        skill = discoverableSkills?.find((s) => s.key === key);
-      }
-
-      if (!skill) {
+    const handleInstall = async (skill: DiscoverableSkill) => {
+      if (!skill?.directory) {
         toast.error(t("skills.notFound"));
         return;
       }

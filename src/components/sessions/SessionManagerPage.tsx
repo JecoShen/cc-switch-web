@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSessionSearch } from "@/hooks/useSessionSearch";
 import { useTranslation } from "react-i18next";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { useVirtualizer } from "@/lib/simple-virtualizer";
 import { toast } from "sonner";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import {
-  AlertTriangle,
   Copy,
   RefreshCw,
   Search,
@@ -24,12 +23,11 @@ import {
   ChevronsDownUp,
 } from "lucide-react";
 import {
-  piKeys,
   useDeleteSessionMutation,
   useSessionMessagesQuery,
   useSessionsQuery,
 } from "@/lib/query";
-import { piApi, sessionsApi } from "@/lib/api";
+import { sessionsApi } from "@/lib/api";
 import type { SessionMeta } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -85,13 +83,11 @@ const SESSION_GROUP_EXPANSION_STORAGE_KEY =
 type ProviderFilter =
   | "all"
   | "codex"
-  | "grokbuild"
   | "claude"
   | "opencode"
   | "openclaw"
   | "gemini"
-  | "hermes"
-  | "pi";
+  | "hermes";
 
 type SessionListViewMode = "flat" | "grouped";
 
@@ -194,12 +190,6 @@ export function SessionManagerPage({ appId }: { appId: string }) {
   const queryClient = useQueryClient();
   const { data, isLoading, refetch } = useSessionsQuery();
   const sessions = data ?? [];
-  const piSessionDiscovery = useQuery({
-    queryKey: piKeys.sessionDiscovery,
-    queryFn: () => piApi.getSessionDiscovery(),
-    enabled: appId === "pi",
-    staleTime: 30 * 1000,
-  });
   const detailRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const [activeMessageIndex, setActiveMessageIndex] = useState<number | null>(
@@ -234,10 +224,6 @@ export function SessionManagerPage({ appId }: { appId: string }) {
   const [expandedDirectoryGroups, setExpandedDirectoryGroups] = useState<
     Set<string>
   >(() => initialGroupExpansionState.expandedDirectoryKeys);
-
-  useEffect(() => {
-    setProviderFilter(appId as ProviderFilter);
-  }, [appId]);
 
   // 使用 FlexSearch 全文搜索
   const { search: searchSessions } = useSessionSearch({
@@ -807,37 +793,6 @@ export function SessionManagerPage({ appId }: { appId: string }) {
         onWheel={(e) => e.stopPropagation()}
       >
         <div className="flex-1 overflow-hidden flex flex-col gap-4">
-          {appId === "pi" &&
-            piSessionDiscovery.data?.status === "requires_project_context" && (
-              <div
-                role="status"
-                className="flex shrink-0 items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-200"
-              >
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                <span>
-                  {t("sessionManager.piRelativeSessionDir")}{" "}
-                  <code>{piSessionDiscovery.data.configuredPath}</code>
-                </span>
-              </div>
-            )}
-          {appId === "pi" &&
-            (piSessionDiscovery.data?.status === "unavailable" ||
-              piSessionDiscovery.isError) && (
-              <div
-                role="alert"
-                className="flex shrink-0 items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-800 dark:text-red-200"
-              >
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                <span>
-                  {t("sessionManager.piDiscoveryUnavailable", {
-                    error:
-                      piSessionDiscovery.data?.status === "unavailable"
-                        ? piSessionDiscovery.data.reason
-                        : extractErrorMessage(piSessionDiscovery.error),
-                  })}
-                </span>
-              </div>
-            )}
           {/* 主内容区域 - 左右分栏 */}
           <div className="flex-1 overflow-hidden grid gap-4 md:grid-cols-[320px_1fr]">
             {/* 左侧会话列表 */}
@@ -1122,16 +1077,6 @@ export function SessionManagerPage({ appId }: { appId: string }) {
                                 <span>Codex</span>
                               </div>
                             </SelectItem>
-                            <SelectItem value="grokbuild">
-                              <div className="flex items-center gap-2">
-                                <ProviderIcon
-                                  icon="grok"
-                                  name="grokbuild"
-                                  size={14}
-                                />
-                                <span>Grok Build</span>
-                              </div>
-                            </SelectItem>
                             <SelectItem value="claude">
                               <div className="flex items-center gap-2">
                                 <ProviderIcon
@@ -1170,12 +1115,6 @@ export function SessionManagerPage({ appId }: { appId: string }) {
                                   size={14}
                                 />
                                 <span>Gemini CLI</span>
-                              </div>
-                            </SelectItem>
-                            <SelectItem value="pi">
-                              <div className="flex items-center gap-2">
-                                <ProviderIcon icon="pi" name="pi" size={14} />
-                                <span>Pi</span>
                               </div>
                             </SelectItem>
                           </SelectContent>

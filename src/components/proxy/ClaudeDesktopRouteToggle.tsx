@@ -25,10 +25,7 @@ export function ClaudeDesktopRouteToggle({
 
   const isBusy = isStarting || isStoppingServer;
   const otherTakeoverActive = Boolean(
-    takeoverStatus?.claude ||
-      takeoverStatus?.codex ||
-      takeoverStatus?.gemini ||
-      takeoverStatus?.grokbuild,
+    takeoverStatus?.claude || takeoverStatus?.codex || takeoverStatus?.gemini,
   );
   const routeAddress = status?.address ?? "127.0.0.1";
   const routePort = status?.port ?? 15721;
@@ -84,7 +81,7 @@ export function ClaudeDesktopRouteToggle({
           className={cn(
             "h-4 w-4 transition-colors",
             isRunning
-              ? "text-emerald-500 status-heartbeat"
+              ? "text-emerald-500 animate-pulse"
               : "text-muted-foreground",
           )}
         />

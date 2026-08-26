@@ -10,23 +10,17 @@ import { Switch } from "@/components/ui/switch";
 import { useProxyStatus } from "@/hooks/useProxyStatus";
 import { cn } from "@/lib/utils";
 import { useTranslation } from "react-i18next";
-import { getAppLabel, type ProxyAppId } from "@/config/appConfig";
+import type { AppId } from "@/lib/api";
 
 interface ProxyToggleProps {
   className?: string;
-  activeApp: ProxyAppId;
+  activeApp: AppId;
 }
 
 export function ProxyToggle({ className, activeApp }: ProxyToggleProps) {
   const { t } = useTranslation();
-  const {
-    isRunning,
-    takeoverStatus,
-    setTakeoverForApp,
-    isPending,
-    isInitialStatusPending,
-    status,
-  } = useProxyStatus();
+  const { isRunning, takeoverStatus, setTakeoverForApp, isPending, status } =
+    useProxyStatus();
 
   const handleToggle = async (checked: boolean) => {
     try {
@@ -38,7 +32,14 @@ export function ProxyToggle({ className, activeApp }: ProxyToggleProps) {
 
   const takeoverEnabled = takeoverStatus?.[activeApp] || false;
 
-  const appLabel = getAppLabel(activeApp);
+  const appLabel =
+    activeApp === "claude"
+      ? "Claude"
+      : activeApp === "codex"
+        ? "Codex"
+        : activeApp === "gemini"
+          ? "Gemini"
+          : "OpenCode";
 
   const tooltipText = takeoverEnabled
     ? isRunning
@@ -72,7 +73,7 @@ export function ProxyToggle({ className, activeApp }: ProxyToggleProps) {
           className={cn(
             "h-4 w-4 transition-colors",
             takeoverEnabled
-              ? "text-emerald-500 status-heartbeat"
+              ? "text-emerald-500 animate-pulse"
               : "text-muted-foreground",
           )}
         />
@@ -80,7 +81,7 @@ export function ProxyToggle({ className, activeApp }: ProxyToggleProps) {
       <Switch
         checked={takeoverEnabled}
         onCheckedChange={handleToggle}
-        disabled={isPending || isInitialStatusPending}
+        disabled={isPending}
       />
     </div>
   );

@@ -1,15 +1,10 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/transport";
 import type { TFunction } from "i18next";
 import { toast } from "sonner";
 
 export interface FetchedModel {
   id: string;
   ownedBy: string | null;
-}
-
-export interface ModelFetchOptions {
-  apiFormat?: string;
-  requestHeaders?: Record<string, string>;
 }
 
 /**
@@ -24,7 +19,6 @@ export async function fetchModelsForConfig(
   isFullUrl?: boolean,
   modelsUrl?: string,
   customUserAgent?: string,
-  options?: ModelFetchOptions,
 ): Promise<FetchedModel[]> {
   return invoke("fetch_models_for_config", {
     baseUrl,
@@ -32,19 +26,7 @@ export async function fetchModelsForConfig(
     isFullUrl,
     modelsUrl,
     customUserAgent,
-    apiFormat: options?.apiFormat,
-    requestHeaders: options?.requestHeaders,
   });
-}
-
-export interface OpenCodeModelRef {
-  providerId: string;
-  modelId: string;
-}
-
-/** 获取 OpenCode 当前运行时可用模型（包含 OAuth 与 Zen 免费模型）。 */
-export async function getOpenCodeModels(): Promise<OpenCodeModelRef[]> {
-  return invoke("get_opencode_models");
 }
 
 /**
@@ -56,15 +38,6 @@ export async function fetchCodexOauthModels(
   accountId?: string | null,
 ): Promise<FetchedModel[]> {
   return invoke("get_codex_oauth_models", {
-    accountId: accountId || null,
-  });
-}
-
-/** 获取当前 xAI OAuth 账号可访问的模型列表。 */
-export async function fetchXaiOauthModels(
-  accountId?: string | null,
-): Promise<FetchedModel[]> {
-  return invoke("get_xai_oauth_models", {
     accountId: accountId || null,
   });
 }

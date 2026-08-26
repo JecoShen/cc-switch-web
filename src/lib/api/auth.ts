@@ -1,9 +1,47 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/transport";
 
-export type ManagedAuthProvider =
-  | "github_copilot"
-  | "codex_oauth"
-  | "xai_oauth";
+// Auth API uses direct HTTP fetch to avoid the pre-login transport bootstrap problem:
+// WebSocket transport requires an authenticated session, but auth checks must happen first.
+const API_BASE = import.meta.env.VITE_CC_SWITCH_API_BASE || "/api";
+
+export interface AuthStatusResponse {
+  enabled: boolean;
+}
+
+export interface LoginResponse {
+  success: boolean;
+  error?: string;
+}
+
+export interface SessionCheckResponse {
+  valid: boolean;
+}
+
+async function invokePreAuth<T>(
+  command: string,
+  payload: unknown = {},
+): Promise<T> {
+  const res = await fetch(`${API_BASE}/invoke`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ command, payload }),
+  });
+
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(text || `Auth invoke failed for ${command}`);
+  }
+
+  const json = JSON.parse(text);
+  if (json.error) {
+    throw new Error(json.error);
+  }
+
+  return json.result as T;
+}
+
+export type ManagedAuthProvider = "github_copilot" | "codex_oauth";
 
 export interface ManagedAuthAccount {
   id: string;
@@ -13,10 +51,6 @@ export interface ManagedAuthAccount {
   authenticated_at: number;
   is_default: boolean;
   github_domain: string;
-  /** Codex-only: the account predates persisted id_token support. */
-  reauth_required?: boolean;
-  /** xAI-only: the refresh credential is invalid and the account is unusable. */
-  requires_reauth: boolean;
 }
 
 export interface ManagedAuthStatus {
@@ -103,6 +137,18 @@ export async function authLogout(
 }
 
 export const authApi = {
+  checkStatus(): Promise<AuthStatusResponse> {
+    return invokePreAuth<AuthStatusResponse>("auth.status", {});
+  },
+
+  login(username: string, password: string): Promise<LoginResponse> {
+    return invokePreAuth<LoginResponse>("auth.login", { username, password });
+  },
+
+  checkSession(): Promise<SessionCheckResponse> {
+    return invokePreAuth<SessionCheckResponse>("auth.check", {});
+  },
+
   authStartLogin,
   authPollForAccount,
   authListAccounts,

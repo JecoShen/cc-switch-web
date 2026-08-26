@@ -19,17 +19,11 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ToggleRow } from "@/components/ui/toggle-row";
 import { useProxyStatus } from "@/hooks/useProxyStatus";
 import type { SettingsFormState } from "@/hooks/useSettings";
-import { getAppLabel, PROXY_APP_IDS } from "@/config/appConfig";
 
 interface ProxyTabContentProps {
   settings: SettingsFormState;
   onAutoSave: (updates: Partial<SettingsFormState>) => Promise<boolean | void>;
 }
-
-export const FAILOVER_APPS = PROXY_APP_IDS.map((id) => ({
-  id,
-  label: getAppLabel(id),
-}));
 
 export function ProxyTabContent({
   settings,
@@ -117,7 +111,7 @@ export function ProxyTabContent({
                 className="gap-1.5 h-6 ml-auto mr-2"
               >
                 <Activity
-                  className={`h-3 w-3 ${isRunning ? "status-heartbeat" : ""}`}
+                  className={`h-3 w-3 ${isRunning ? "animate-pulse" : ""}`}
                 />
                 {isRunning
                   ? t("settings.advanced.proxy.running")
@@ -178,14 +172,12 @@ export function ProxyTabContent({
               )}
 
               <Tabs defaultValue="claude" className="w-full">
-                <TabsList className="grid w-full grid-cols-4">
-                  {FAILOVER_APPS.map(({ id, label }) => (
-                    <TabsTrigger key={id} value={id}>
-                      {label}
-                    </TabsTrigger>
-                  ))}
+                <TabsList className="grid w-full grid-cols-3">
+                  <TabsTrigger value="claude">Claude</TabsTrigger>
+                  <TabsTrigger value="codex">Codex</TabsTrigger>
+                  <TabsTrigger value="gemini">Gemini</TabsTrigger>
                 </TabsList>
-                {FAILOVER_APPS.map(({ id: appType }) => {
+                {(["claude", "codex", "gemini"] as const).map((appType) => {
                   const failoverDisabled =
                     !isRunning || !(takeoverStatus?.[appType] ?? false);
                   return (

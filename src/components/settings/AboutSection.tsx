@@ -3,8 +3,6 @@ import {
   Download,
   Copy,
   ExternalLink,
-  Github,
-  Globe,
   Info,
   Loader2,
   RefreshCw,
@@ -25,7 +23,7 @@ import {
 } from "@/components/ui/select";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { getVersion } from "@tauri-apps/api/app";
+import { getCurrentVersion } from "@/lib/updater";
 import { settingsApi } from "@/lib/api";
 import type {
   ToolInstallation,
@@ -63,11 +61,9 @@ const TOOL_NAMES = [
   "claude",
   "codex",
   "gemini",
-  "grok",
   "opencode",
   "openclaw",
   "hermes",
-  "pi",
 ] as const;
 type ToolName = (typeof TOOL_NAMES)[number];
 type ToolLifecycleAction = "install" | "update";
@@ -132,16 +128,12 @@ ${posixScriptInstallCommand("https://claude.ai/install.sh")} || npm i -g @anthro
 npm i -g @openai/codex@latest
 # Gemini CLI
 npm i -g @google/gemini-cli@latest
-# Grok Build
-npm i -g @xai-official/grok@latest
 # OpenCode
 ${posixScriptInstallCommand("https://opencode.ai/install")} || npm i -g opencode-ai@latest
 # OpenClaw
 npm i -g openclaw@latest
 # Hermes
-${posixScriptInstallCommand("https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh")}
-# Pi
-npm i -g @earendil-works/pi-coding-agent@latest`;
+${posixScriptInstallCommand("https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh")}`;
 
 const WINDOWS_ONE_CLICK_INSTALL_COMMANDS = `# Claude Code
 npm i -g @anthropic-ai/claude-code@latest
@@ -149,16 +141,12 @@ npm i -g @anthropic-ai/claude-code@latest
 npm i -g @openai/codex@latest
 # Gemini CLI
 npm i -g @google/gemini-cli@latest
-# Grok Build
-npm i -g @xai-official/grok@latest
 # OpenCode
 npm i -g opencode-ai@latest
 # OpenClaw
 npm i -g openclaw@latest
 # Hermes
-${HERMES_WINDOWS_INSTALL_COMMAND}
-# Pi
-npm i -g @earendil-works/pi-coding-agent@latest`;
+${HERMES_WINDOWS_INSTALL_COMMAND}`;
 
 const ONE_CLICK_INSTALL_COMMANDS = isWindows()
   ? WINDOWS_ONE_CLICK_INSTALL_COMMANDS
@@ -168,11 +156,9 @@ const TOOL_DISPLAY_NAMES: Record<ToolName, string> = {
   claude: "Claude Code",
   codex: "Codex",
   gemini: "Gemini CLI",
-  grok: "Grok Build",
   opencode: "OpenCode",
   openclaw: "OpenClaw",
   hermes: "Hermes",
-  pi: "Pi",
 };
 
 // 后端返回的 tool 是 string；这里收敛唯一的 ToolName 断言与兜底，供升级确认
@@ -185,11 +171,9 @@ const TOOL_APP_IDS: Record<ToolName, AppId> = {
   claude: "claude",
   codex: "codex",
   gemini: "gemini",
-  grok: "grokbuild",
   opencode: "opencode",
   openclaw: "openclaw",
   hermes: "hermes",
-  pi: "pi",
 };
 
 // 工具版本探测代价高：每个工具一次 `--version` 子进程 + 一次 npm/github/pypi 网络请求。
@@ -260,12 +244,9 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
   const [isDiagnosingAll, setIsDiagnosingAll] = useState(false);
   // 升级前探测到「多处安装需确认」时暂存：toolNames=本次要升级的全部工具，
   // plans=其中需要确认的（≥2 处）那些。用户确认后对 toolNames 整体执行升级。
-  // fromBatchEntry=是否来自「全部升级」入口：确认后执行期需据此补 batchAction
-  // （executeRun 按数量判 isBatch，「全部升级(1)」会漏掉顶部按钮的 spinner）。
   const [pendingUpgrade, setPendingUpgrade] = useState<{
     toolNames: ToolName[];
     plans: ToolInstallationReport[];
-    fromBatchEntry: boolean;
   } | null>(null);
   // 升级 preflight(probe 阶段)的 in-flight 工具集合。
   // probeToolInstallations 是个 1-3 秒级别的跨进程探测(对每个工具跑 --version + canonicalize),
@@ -406,7 +387,7 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
     // 拆成两条独立链路：应用版本一拿到就立刻显示，工具探测各自渐进刷新，互不阻塞。
     const loadAppVersion = async () => {
       try {
-        const appVersion = await getVersion();
+        const appVersion = await getCurrentVersion();
         appVersionCache = appVersion;
         if (active) {
           setVersion(appVersion);
@@ -755,11 +736,7 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
   // 只要有一个工具被锁,整批不开新一轮,因为后端 set -e 串行的语义假设是「一次性
   // 单脚本」,跨两次 IPC 并发会破坏它。
   const handleRunToolAction = useCallback(
-    async (
-      toolNames: ToolName[],
-      action: ToolLifecycleAction,
-      options?: { fromBatchEntry?: boolean },
-    ) => {
+    async (toolNames: ToolName[], action: ToolLifecycleAction) => {
       if (toolNames.length === 0) return;
       if (
         toolNames.some(
@@ -775,15 +752,6 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
         toolNames.forEach((name) => next.add(name));
         return next;
       });
-      // 「全部升级」入口在 probe 阶段就点亮 spinner:batchAction 若只由 executeRun
-      // 置位,预检的数秒(探测超时兜底时更久)里按钮只 disabled 不转圈,观感如
-      // "点了没反应"。按入口来源而非 toolNames.length 判定——「全部升级(1)」
-      // 传入长度 1,按数量判会漏。executeRun 内部会再置位/清除,重复 set 无害;
-      // 弹确认框路径由 finally 清掉,对话框期间不转圈。
-      const fromBatchEntry = options?.fromBatchEntry ?? false;
-      if (fromBatchEntry) {
-        setBatchAction(action);
-      }
       try {
         if (action === "install") {
           await executeRun(toolNames, action);
@@ -803,11 +771,8 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
           await executeRun(toolNames, action);
           return;
         }
-        setPendingUpgrade({ toolNames, plans: needConfirm, fromBatchEntry });
+        setPendingUpgrade({ toolNames, plans: needConfirm });
       } finally {
-        if (fromBatchEntry) {
-          setBatchAction(null);
-        }
         setPreflightTools((prev) => {
           const next = new Set(prev);
           toolNames.forEach((name) => next.delete(name));
@@ -820,17 +785,7 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
 
   const handleConfirmUpgrade = useCallback(() => {
     if (pendingUpgrade) {
-      const { toolNames, fromBatchEntry } = pendingUpgrade;
-      // executeRun 按数量判 isBatch，「全部升级(1)」确认后执行期会漏置 batchAction，
-      // 由入口来源在这里补上；对 >1 的场景 executeRun 会重复置位/清除，无害。
-      if (fromBatchEntry) {
-        setBatchAction("update");
-      }
-      void executeRun(toolNames, "update").finally(() => {
-        if (fromBatchEntry) {
-          setBatchAction(null);
-        }
-      });
+      void executeRun(pendingUpgrade.toolNames, "update");
     }
     setPendingUpgrade(null);
   }, [pendingUpgrade, executeRun]);
@@ -899,30 +854,6 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
           </div>
 
           <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => settingsApi.openExternal("https://ccswitch.io")}
-              className="h-8 gap-1.5 text-xs"
-            >
-              <Globe className="h-3.5 w-3.5" />
-              {t("settings.officialWebsite")}
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() =>
-                settingsApi.openExternal(
-                  "https://github.com/farion1231/cc-switch",
-                )
-              }
-              className="h-8 gap-1.5 text-xs"
-            >
-              <Github className="h-3.5 w-3.5" />
-              {t("settings.github")}
-            </Button>
             <Button
               type="button"
               variant="outline"
@@ -1024,11 +955,7 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
             <Button
               size="sm"
               className="h-7 gap-1.5 text-xs"
-              onClick={() =>
-                handleRunToolAction(updatableToolNames, "update", {
-                  fromBatchEntry: true,
-                })
-              }
+              onClick={() => handleRunToolAction(updatableToolNames, "update")}
               disabled={
                 isLoadingTools || isAnyBusy || updatableToolNames.length === 0
               }
@@ -1233,9 +1160,7 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
                       onClick={() => handleRunToolAction([toolName], action)}
                       disabled={isToolVersionLoading || isAnyBusy}
                     >
-                      {/* preflight（升级前冲突探测）阶段也转圈：此时 toolActions
-                          尚未置位，只 disabled 不转圈会让探测的数秒像"点了没反应"。 */}
-                      {runningAction || preflightTools.has(toolName) ? (
+                      {runningAction ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
                       ) : action === "install" ? (
                         <Download className="h-3.5 w-3.5" />

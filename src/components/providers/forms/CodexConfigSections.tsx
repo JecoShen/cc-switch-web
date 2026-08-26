@@ -1,3 +1,6 @@
+// NOTE: Codex 1M 上下文 UI 已暂时隐藏（详见下方 CodexConfigSection 内 JSX 注释）。
+// 如需恢复，请同时：
+//   - 取消下面 `@/utils/providerConfigUtils` import 的注释
 import React, {
   useCallback,
   useEffect,
@@ -8,12 +11,18 @@ import React, {
 import { useTranslation } from "react-i18next";
 import JsonEditor from "@/components/JsonEditor";
 import {
-  extractCodexTopLevelInt,
+  isCodexGoalModeEnabled,
   isCodexRemoteCompactionEnabled,
-  removeCodexTopLevelField,
+  setCodexGoalMode,
   setCodexRemoteCompaction,
-  setCodexTopLevelInt,
 } from "@/utils/providerConfigUtils";
+/*
+import {
+  extractCodexTopLevelInt,
+  setCodexTopLevelInt,
+  removeCodexTopLevelField,
+} from "@/utils/providerConfigUtils";
+*/
 
 interface CodexAuthSectionProps {
   value: string;
@@ -72,7 +81,7 @@ export const CodexAuthSection: React.FC<CodexAuthSectionProps> = ({
         onChange={handleChange}
         placeholder={t("codexConfig.authJsonPlaceholder")}
         darkMode={isDarkMode}
-        rows={3}
+        rows={6}
         showValidation={true}
         language="json"
       />
@@ -158,9 +167,20 @@ export const CodexConfigSection: React.FC<CodexConfigSectionProps> = ({
     [onChange],
   );
 
+  const goalModeEnabled = useMemo(
+    () => isCodexGoalModeEnabled(localValue),
+    [localValue],
+  );
   const remoteCompactionEnabled = useMemo(
     () => isCodexRemoteCompactionEnabled(localValue),
     [localValue],
+  );
+
+  const handleGoalModeToggle = useCallback(
+    (checked: boolean) => {
+      handleLocalChange(setCodexGoalMode(localValueRef.current || "", checked));
+    },
+    [handleLocalChange],
   );
 
   const handleRemoteCompactionToggle = useCallback(
@@ -176,6 +196,8 @@ export const CodexConfigSection: React.FC<CodexConfigSectionProps> = ({
     [handleLocalChange, providerName],
   );
 
+  // Codex 1M 上下文相关状态/回调暂时禁用——见同文件下方 JSX 注释处的恢复说明。
+  /*
   // Parse toggle states from TOML text
   const toggleStates = useMemo(() => {
     const contextWindow = extractCodexTopLevelInt(
@@ -243,6 +265,7 @@ export const CodexConfigSection: React.FC<CodexConfigSectionProps> = ({
   useEffect(() => {
     return () => clearTimeout(compactTimerRef.current);
   }, []);
+  */
 
   return (
     <div className="space-y-2">
@@ -255,6 +278,16 @@ export const CodexConfigSection: React.FC<CodexConfigSectionProps> = ({
         </label>
 
         <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1">
+          <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={goalModeEnabled}
+              onChange={(e) => handleGoalModeToggle(e.target.checked)}
+              className="w-4 h-4 text-blue-500 bg-white dark:bg-gray-800 border-border-default rounded focus:ring-blue-500 dark:focus:ring-blue-400 focus:ring-2"
+            />
+            {t("codexConfig.enableGoalMode")}
+          </label>
+
           {showRemoteCompaction && (
             <label
               className="inline-flex cursor-pointer items-center gap-2 text-sm text-muted-foreground"
@@ -298,6 +331,8 @@ export const CodexConfigSection: React.FC<CodexConfigSectionProps> = ({
         </p>
       )}
 
+      {/* Codex 1M 上下文 UI 已隐藏：模型不再支持该字段。
+          恢复方法：(1) 取消本段 JSX 注释；(2) 取消文件顶部 import 中 useMemo / extractCodexTopLevelInt / setCodexTopLevelInt / removeCodexTopLevelField 的注释；(3) 取消下方 toggleStates / compactTimerRef / handleContextWindowToggle / handleCompactLimitChange / cleanup useEffect 的注释。
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
         <label className="inline-flex items-center gap-2 text-sm text-muted-foreground cursor-pointer">
           <input
@@ -322,13 +357,14 @@ export const CodexConfigSection: React.FC<CodexConfigSectionProps> = ({
           />
         </label>
       </div>
+      */}
 
       <JsonEditor
         value={localValue}
         onChange={handleLocalChange}
         placeholder=""
         darkMode={isDarkMode}
-        rows={3}
+        rows={8}
         showValidation={false}
         language="javascript"
       />

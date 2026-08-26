@@ -18,8 +18,8 @@ type SkillCardSkill = DiscoverableSkill & { installed: boolean };
 
 interface SkillCardProps {
   skill: SkillCardSkill;
-  onInstall: (key: string) => Promise<void>;
-  onUninstall: (key: string) => Promise<void>;
+  onInstall: (skill: DiscoverableSkill) => Promise<void>;
+  onUninstall: (directory: string) => Promise<void>;
   installs?: number;
 }
 
@@ -35,7 +35,7 @@ export function SkillCard({
   const handleInstall = async () => {
     setLoading(true);
     try {
-      await onInstall(skill.key);
+      await onInstall(skill);
     } finally {
       setLoading(false);
     }
@@ -44,7 +44,7 @@ export function SkillCard({
   const handleUninstall = async () => {
     setLoading(true);
     try {
-      await onUninstall(skill.key);
+      await onUninstall(skill.directory);
     } finally {
       setLoading(false);
     }

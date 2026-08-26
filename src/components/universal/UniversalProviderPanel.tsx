@@ -7,7 +7,6 @@ import { UniversalProviderCard } from "./UniversalProviderCard";
 import { UniversalProviderFormModal } from "./UniversalProviderFormModal";
 import { universalProvidersApi } from "@/lib/api";
 import type { UniversalProvider, UniversalProvidersMap } from "@/types";
-import { deepClone } from "@/utils/deepClone";
 
 export function UniversalProviderPanel() {
   const { t } = useTranslation();
@@ -170,7 +169,7 @@ export function UniversalProviderPanel() {
   const handleDuplicate = useCallback(
     async (provider: UniversalProvider) => {
       const duplicated: UniversalProvider = {
-        ...deepClone(provider),
+        ...JSON.parse(JSON.stringify(provider)),
         id: crypto.randomUUID(),
         name: `${provider.name} copy`,
         createdAt: Date.now(),

@@ -1,10 +1,11 @@
+import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { AppId } from "@/lib/api/types";
 import type { UsageResult } from "@/types";
 import type { SubscriptionQuota } from "@/types/subscription";
 import { usageKeys } from "@/lib/query/usage";
 import { subscriptionKeys } from "@/lib/query/subscription";
-import { useTauriEvent } from "./useTauriEvent";
+import { listen, type UnlistenFn } from "@/lib/transport";
 
 type UsageCacheUpdatedPayload =
   | {
@@ -27,17 +28,38 @@ type UsageCacheUpdatedPayload =
 export function useUsageCacheBridge() {
   const queryClient = useQueryClient();
 
-  useTauriEvent<UsageCacheUpdatedPayload>("usage-cache-updated", (payload) => {
-    if (payload.kind === "script") {
-      queryClient.setQueryData<UsageResult>(
-        usageKeys.script(payload.providerId, payload.appType),
-        payload.data,
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let disposed = false;
+
+    (async () => {
+      const off = await listen<UsageCacheUpdatedPayload>(
+        "usage-cache-updated",
+        (payload) => {
+          if (payload.kind === "script") {
+            queryClient.setQueryData<UsageResult>(
+              usageKeys.script(payload.providerId, payload.appType),
+              payload.data,
+            );
+          } else if (payload.kind === "subscription") {
+            queryClient.setQueryData<SubscriptionQuota>(
+              subscriptionKeys.quota(payload.appType),
+              payload.data,
+            );
+          }
+        },
       );
-    } else if (payload.kind === "subscription") {
-      queryClient.setQueryData<SubscriptionQuota>(
-        subscriptionKeys.quota(payload.appType),
-        payload.data,
-      );
-    }
-  });
+
+      if (disposed) {
+        off();
+      } else {
+        unlisten = off;
+      }
+    })();
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [queryClient]);
 }

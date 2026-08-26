@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/transport";
 import type {
   HermesMemoryKind,
   HermesMemoryLimits,
@@ -25,7 +25,16 @@ export const hermesApi = {
    * Optional `path` lets callers deep-link to specific pages like `/config`.
    */
   async openWebUI(path?: string): Promise<void> {
-    await invoke("open_hermes_web_ui", { path: path ?? null });
+    const target = await invoke<string>("open_hermes_web_ui", {
+      path: path ?? null,
+    });
+    if (typeof window === "undefined" || !target) {
+      return;
+    }
+    const opened = window.open(target, "_blank", "noopener,noreferrer");
+    if (!opened) {
+      window.location.assign(target);
+    }
   },
 
   /** Open the preferred terminal and run `hermes dashboard` (non-blocking). */
